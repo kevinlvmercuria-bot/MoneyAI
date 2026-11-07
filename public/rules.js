@@ -115,8 +115,7 @@ const NailMateRules = (() => {
         if (opportunity === 'wake') return member.lifecycle === 'dormant';
         if (opportunity === 'repurchase') return ['due', 'low_frequency'].includes(member.lifecycle);
         if (opportunity === 'balance') return member.ratio > 1.15 && member.bal > 0;
-        if (opportunity === 'care') return member.ratio > 1.15 && member.careProfile?.optIn === true &&
-            Boolean(member.careProfile.tags && member.careProfile.tags !== '无明确护理需求');
+        if (opportunity === 'care') return member.days >= 20 && member.days <= 40;
         return opportunity === 'all' && member.ratio > 1.15;
     }
 

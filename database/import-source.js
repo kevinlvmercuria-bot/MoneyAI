@@ -57,7 +57,7 @@ function mapMembers(rows) {
             appointment: Boolean(row.has_upcoming_appointment) || upcoming.has(row.member_id),
             ratio: row.overdue_ratio, lifecycle: row.lifecycle, lastVisit: row.last_visit,
             level: row.membership_level, latestNote: row.latest_note, preferredTechnician: row.preferred_technician,
-            cycleConfidence: row.cycle_confidence, source: 'sqlite_import',
+            cycleConfidence: row.cycle_confidence, source: 'sqlite_import', personality: row.personality || '',
         };
     });
 }
