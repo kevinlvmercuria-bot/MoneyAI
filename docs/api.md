@@ -21,6 +21,9 @@
 - `members` 是会员快照。字符串字段为 `id`、`style`、`secondary`、`level`、`lastVisit`（`YYYY-MM-DD`）与 `lifecycle`。生命周期取值为 `active`、`due`、`low_frequency`、`dormant`。
 - 会员数值字段为 `days`（未到店天数）、`cycle`（平均复购周期天数）、`visits`（历史次数）、`spend`（累计消费，元）、`bal`（余额，元）、`contactDays`（距上次联系天数）、`ratio`（偏离倍数）。`consent`、`complaint`、`appointment` 分别表示营销授权、未处理投诉、未来预约，均为布尔值。
 - `goal` 取 `wake`（沉睡唤醒）、`balance`（余额提醒）、`launch`（新品邀约）或 `general`（通用演示）。前三种每次接收当前推荐名单中的 1 至 5 个不同会员编号。通用演示仅接收 1 位会员。后端复核整批请求，有候选失效时整批退回。
+- 五栏界面使用同一个 POST `/api/tasks`，请求为 `{"opportunity":"care","memberIds":["M0002"]}`。`opportunity` 取 `all`、`wake`、`repurchase`、`balance`、`care`，不能与 `goal` 同时提交。后端复核本机会当前推荐的最多 5 位会员，整批保存或整批退回。旧 `goal` 请求继续兼容。
+- 机会人数共用联系资格、未处理及无有效任务规则，可重叠不相加。全部机会要求周期偏离大于 1.15；沉睡要求 `dormant`；到期复购要求 `due` 或 `low_frequency`；储值关怀要求偏离大于 1.15 且有余额；护理回访要求偏离大于 1.15、有明确护理标签并同意护理跟进。`careProfile.optIn` 是从原始护理档案读取的布尔值。
+- 机会名单按已有规则优先级降序、封顶 4 倍的周期偏离降序、编号升序排序。全部机会自动为每人分配具体策略。沿用既有表结构：沉睡、储值分别保存为 `wake`、`balance`，到期复购和护理保存为 `general`，具体类别由 `strategy`、`reason` 和 `message` 表达；后两者计入复盘总览及通用演示筛选，不新增数据库目标枚举。护理任务审核和执行时再次校验护理资格。
 - 任务状态从 `pending_review` 进入 `approved` 或 `rejected`。只有 `approved` 可以进入 `executed_simulated`。通过时必须传入去除首尾空白后为 1 至 1000 字符的话术。审核通过、模拟执行时复查联系资格。一个会员同时只能有一条未拒绝任务。
 - `scenario` 支持 `noReply`（未回复）、`reply`（已回复，未预约）、`booking`（已预约，待到店）、`visit`（已到店并消费）。只有 `visit` 产生固定演示消费 168 元。
 - `logs` 返回最新 40 条，包含 `name`（动作名）、`desc`（描述）和 `time`（北京时间 `HH:mm:ss`）。
@@ -67,16 +70,18 @@
 
 ## AI 文案与产品图
 
-状态快照增加 `ai` 和 `copyDrafts`。`ai` 包含 `configured`、可选模型列表 `models`（`id`、`label`）和 `defaultModel`。密钥不随接口返回。`copyDrafts` 是最近 50 条，字段为数字 `id`、`memberId`、`model`、`message`、`originalMessage`、`reason`、`productIds`、`createdAt`、`copiedAt`。未复制时 `copiedAt` 为 null。产品增加 `imageUrl`，未上传时为 null。
+状态快照增加 `ai` 和 `copyDrafts`。`ai` 包含 `configured`、可选模型列表 `models`（`id`、`label`）、`defaultModel`、文案风格列表 `styles`（`id`、`label`）和 `defaultStyle`。密钥不随接口返回。`copyDrafts` 是最近 50 条，字段为数字 `id`、`memberId`、`model`、`message`、`originalMessage`、`reason`、`productIds`、`createdAt`、`copiedAt`。未复制时 `copiedAt` 为 null。产品增加 `imageUrl`，未上传时为 null。
 
 | 方法与路径 | 请求 | 响应 |
 | --- | --- | --- |
-| POST `/api/copy/generate` | `{"memberIds":["M0001"],"model":"Qwen/Qwen3.6-Flash"}` | `{ "items":[{"id":1,"memberId":"M0001"}], "errors":[], "state":{...} }` |
+| POST `/api/copy/generate` | `{"memberIds":["M0001"],"model":"Qwen/Qwen3.6-Flash","style":"friendly"}` | `{ "items":[{"id":1,"memberId":"M0001"}], "errors":[], "state":{...} }` |
 | POST `/api/copy/:id/save` | `{"message":"店主核对后的邀约"}` | `{"state":{...}}` |
 | POST `/api/copy/:id/copied` | `{"message":"实际复制的文案"}`，客户端成功写入剪贴板后调用 | `{"state":{...}}` |
 | POST `/api/products/:id/image` | 图片二进制，Content-Type 为 image/png、image/jpeg 或 image/webp | `{"state":{...}}` |
 | GET `/api/product-images/:id` | 无 | 图片二进制；`?download=1` 使用附件下载 |
 
 每批 1 至 5 个不同会员，保存文案为 1 至 1000 字符。模型只能选择目录内可用产品，最多 2 个。无效模型或名单格式返回 400；会员联系资格失效、重复生成中的批次或不可用产品返回 409。模型服务失败按会员写入 `errors`（含 `memberId` 和可读 `error`），成功项独立保存。批次级错误不会写入文案。图片最多 5 MB，超限返回 413；格式不符返回 400。
+
+`style` 可省略，默认 `friendly`（自然亲切），兼容旧请求。其他值为 `concise`（简洁直接）、`caring`（温柔关怀）、`professional`（专业推荐）；非法值返回 400，且不调用模型、不写入文案。风格映射为服务端固定的语气和篇幅要求，实际传入模型系统提示；不改变会员事实和产品资格规则。风格是本次生成参数，不新增数据库字段，保存的文案内容仍按原契约返回。
 
 模型调用在数据库事务外执行，保存前再次核对会员资格和产品资料。图片以新记录保存，每个产品使用最新绑定图；旧图片 URL 继续有效。更换产品图片不改写生成文案。保存修改会清除该文案的旧复制标记，复制时间独立保存，复制不会改变任务、预约或消费数据。重置演示清除 `CopyDrafts`，保留产品图片；生成进行中重置返回 409。

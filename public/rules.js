@@ -22,6 +22,13 @@ const NailMateRules = (() => {
         balance: { label: '余额提醒', sortBy: 'bal' },
         launch: { label: '新品邀约', sortBy: 'ratio' },
     };
+    const OPPORTUNITIES = {
+        all: { label: '全部机会' },
+        wake: { label: '沉睡唤醒' },
+        repurchase: { label: '到期复购' },
+        balance: { label: '储值关怀' },
+        care: { label: '护理回访' },
+    };
     const SCENARIOS = {
         noReply: { label: '未回复', reply: false, booking: false, visit: false },
         reply: { label: '已回复，未预约', reply: true, booking: false, visit: false },
@@ -99,9 +106,63 @@ const NailMateRules = (() => {
             .slice(0, MAX_TASKS_PER_ANALYSIS);
     }
 
+    function availableOpportunityMembers(members, tasks) {
+        const occupied = new Set(tasks.filter((task) => task.status !== 'rejected').map((task) => task.memberId));
+        return members.filter((member) => canContact(member) && !member.careHandled && !occupied.has(member.id));
+    }
+
+    function matchesOpportunity(member, opportunity) {
+        if (opportunity === 'wake') return member.lifecycle === 'dormant';
+        if (opportunity === 'repurchase') return ['due', 'low_frequency'].includes(member.lifecycle);
+        if (opportunity === 'balance') return member.ratio > 1.15 && member.bal > 0;
+        if (opportunity === 'care') return member.ratio > 1.15 && member.careProfile?.optIn === true &&
+            Boolean(member.careProfile.tags && member.careProfile.tags !== '无明确护理需求');
+        return opportunity === 'all' && member.ratio > 1.15;
+    }
+
+    function opportunityFor(member, opportunity) {
+        if (opportunity !== 'all') return opportunity;
+        if (member.lifecycle === 'dormant') return 'wake';
+        if (member.lifecycle === 'due') return 'repurchase';
+        return member.bal > 0 ? 'balance' : 'repurchase';
+    }
+
+    function opportunityCandidates(members, tasks, opportunity) {
+        return availableOpportunityMembers(members, tasks)
+            .filter((member) => matchesOpportunity(member, opportunity))
+            .sort((a, b) => priorityScore(b) - priorityScore(a) ||
+                Math.min(b.ratio, 4) - Math.min(a.ratio, 4) || a.id.localeCompare(b.id))
+            .slice(0, MAX_TASKS_PER_ANALYSIS);
+    }
+
+    function opportunityProduct(member, opportunity, products = PRODUCTS) {
+        if (opportunityFor(member, opportunity) !== 'care') return productFor(member, products);
+        const services = products.filter((product) => product.isActive !== false &&
+            (!product.launchDate || product.launchDate <= DEMO_DATE) && ['care_service', 'care_product'].includes(product.type));
+        return services.find((product) => product.name === member.careProfile?.preferredService) || services[0];
+    }
+
+    function buildOpportunityTask(member, opportunity, products = PRODUCTS) {
+        const selected = opportunityFor(member, opportunity);
+        // 沿用原表允许的任务目标；新增机会通过 strategy、reason、message 表达，无需迁移业务数据。
+        const goal = ['wake', 'balance'].includes(selected) ? selected : 'general';
+        const task = buildReviewTask(member, null, goal, products);
+        task.strategy = OPPORTUNITIES[selected].label;
+        if (selected === 'repurchase') {
+            const product = opportunityProduct(member, selected, products);
+            task.reason = `${member.days} 天未到店 · 平均周期 ${member.cycle} 天 · 偏好${member.style}`;
+            task.message = `你好呀，记得你喜欢${member.style}款式，近期有再做美甲的想法吗？${product ? `店里有一款「${product.name}」，想先看看款式图吗？` : '想先了解一下你最近喜欢的款式。'}`;
+        } else if (selected === 'care') {
+            task.reason = `${member.days} 天未到店 · 已记录${member.careProfile.tags.replaceAll('|', '、')} · 已同意护理跟进`;
+            task.message = '你好呀，想问问最近的美甲和日常护理情况，有需要的话可以先聊聊近期需求，再看看是否安排到店护理。';
+        }
+        return task;
+    }
+
     return {
         PRODUCTS, GOALS, SCENARIOS, DEMO_SERVICE_PRICE, MAX_TASKS_PER_ANALYSIS, DEMO_DATE, CARE_OUTCOMES,
         money, canContact, priorityScore, productFor, matchesGoal, goalReason, goalCandidates, buildReviewTask,
+        OPPORTUNITIES, availableOpportunityMembers, matchesOpportunity, opportunityCandidates, opportunityFor, opportunityProduct, buildOpportunityTask,
     };
 })();
 

@@ -2,10 +2,9 @@ import { applyState, state } from './state.js';
 import { closeModal, escapeHtml, num, toast } from './components.js';
 import { api } from './api.js';
 import { SCENARIOS, canContact } from './rules-client.js';
-import { dashboard } from './pages/dashboard.js';
+import { dashboard, setupCardTilt } from './pages/dashboard.js';
 import { loadMemberExtra, memberModal, membersPage } from './pages/members.js';
-import { careModal, carePage } from './pages/care.js';
-import { catalogModal, studioPage } from './pages/studio.js';
+import { studioPage } from './pages/studio.js';
 import { campaigns, chooseScenario, taskModal } from './pages/campaigns.js';
 import { reports } from './pages/reports.js';
 import { productsPage } from './pages/products.js';
@@ -25,7 +24,7 @@ async function save(path, body, onSuccess) {
     toast(path === '/copy/generate' ? 'AI 正在生成文案，请稍候…' : '正在保存，请稍候…');
     if (path === '/copy/generate') {
         const status = document.getElementById('ai-generation-status');
-        if (status) status.textContent = '正在逐位生成，请等待本批完成。';
+        if (status) status.textContent = '正在为当前会员准备话术，请稍候。';
     }
     try {
         const response = await api(path, body);
@@ -66,15 +65,16 @@ function setView(v) {
 
 function prepareCare(id) {
     const member = state.members.find((member) => member.id === id);
-    if (!member || !canContact(member) || member.careHandled)
+    if (!member) return;
+    const recorded = state.careRecords.some((record) => record.memberId === id);
+    if (!recorded && (!canContact(member) || member.careHandled))
         return toast('会员已处理或不满足联系资格');
-    state.careMemberId = id;
-    closeModal();
-    if (state.view !== 'care') setView('care');
-    else render();
-    const section = document.getElementById('care-preparation');
+    state.studioMemberId = id;
+    setView('studio');
+    const section = document.getElementById('workbench-followup');
+    section.open = true;
     section.scrollIntoView({ block: 'start' });
-    section.querySelector('h2').focus({ preventScroll: true });
+    section.querySelector('summary').focus({ preventScroll: true });
 }
 
 function saveCare(form) {
@@ -91,9 +91,10 @@ function saveCare(form) {
         },
         () => {
             state.careDrafts.delete(memberId);
-            state.careMemberId = null;
             render();
-            document.getElementById('care-history').scrollIntoView({ block: 'nearest' });
+            const section = document.getElementById('workbench-followup');
+            section.open = true;
+            section.scrollIntoView({ block: 'nearest' });
             toast('关怀记录与后续计划已保存');
         },
     );
@@ -113,17 +114,25 @@ function flipCard(id) {
     (flipped ? back : front).querySelector('[data-action="flip"]').focus({ preventScroll: true });
 }
 
-function generateFor(memberIds, model = state.selectedModel) {
-    if (!memberIds.length) return toast('请先勾选会员');
-    return save('/copy/generate', { memberIds, model }, ({ items, errors }) => {
-        state.generationErrors = errors;
-        items.forEach((item) => state.selectedMembers.delete(item.memberId));
-        render();
-        document.getElementById('copy-results').scrollIntoView({ block: 'start' });
-        toast(
-            `已生成 ${items.length} 套文案${errors.length ? `，${errors.length} 位未完成，可查看原因后重试` : ''}`,
-        );
-    });
+function generateFor(memberId = state.studioMemberId) {
+    if (!memberId) return toast('请先选择会员');
+    if (!state.aiConfig.configured) return toast('请先检查服务端 AI 配置');
+    if (!state.aiConfig.models.some((model) => model.id === state.selectedModel))
+        return toast('请选择可用模型');
+    return save(
+        '/copy/generate',
+        { memberIds: [memberId], model: state.selectedModel, style: state.selectedCopyStyle },
+        ({ items, errors }) => {
+            state.generationErrors = errors;
+            render();
+            document.getElementById('copy-results').scrollIntoView({ block: 'start' });
+            toast(
+                items.length
+                    ? 'AI 话术与匹配产品已生成，请核对后发送'
+                    : '生成未完成，请查看原因后重试',
+            );
+        },
+    );
 }
 
 function uploadProductImage() {
@@ -176,7 +185,6 @@ function render() {
         reports: ['复购结果', 'STUDIO JOURNAL', reports, '从一条问候，到一次预约，再到真正到店。'],
         products: ['产品库', 'THE COLLECTION', productsPage, '把喜欢的款式，收进门店的灵感册。'],
         studio: ['话术工作台', 'PERSONAL NOTES', studioPage, '把了解，变成一段自然的沟通。'],
-        care: ['护理跟进', 'AFTER THE VISIT', carePage, '聊完之后，把顾客反馈与下一步记下来。'],
     };
     document.getElementById('content').innerHTML = pages[state.view][2]();
     document.getElementById('page-title').textContent = pages[state.view][0];
@@ -203,16 +211,8 @@ function render() {
               .map((entry) => `<li>[${escapeHtml(entry.time)}] ${escapeHtml(entry.desc)}</li>`)
               .join('')
         : '<li>暂无操作记录。</li>';
+    if (state.view === 'dashboard') setupCardTilt();
     if (state.view === 'members') loadMemberExtra(state.profileMemberId);
-}
-
-function addMemberTask(memberId) {
-    return save('/tasks', { goal: 'general', memberIds: [memberId] }, () => {
-        closeModal();
-        state.taskFilter = 'pending_review';
-        setView('campaigns');
-        toast('已加入待审核任务');
-    });
 }
 
 function runAnalysis() {
@@ -226,7 +226,7 @@ function queueGoalTasks() {
         (input) => input.value,
     );
     if (!memberIds.length) return toast('请先勾选要加入待审核的会员');
-    return save('/tasks', { goal: state.selectedGoal, memberIds }, ({ created }) => {
+    return save('/tasks', { opportunity: state.selectedOpportunity, memberIds }, ({ created }) => {
         state.taskFilter = 'pending_review';
         setView('campaigns');
         toast(`已加入 ${created} 条待审核任务`);
@@ -268,7 +268,7 @@ function reset() {
         state.search = '';
         state.page = 1;
         state.taskFilter = 'all';
-        state.selectedGoal = 'wake';
+        state.selectedOpportunity = 'all';
         state.reportGoal = 'all';
         state.planLimit = 3;
         state.selectedTaskId = null;
@@ -276,13 +276,9 @@ function reset() {
         state.productFilter = 'all';
         state.productPage = 1;
         state.productsWithoutImage = false;
-        state.careMemberId = null;
-        state.careFilter = 'pending';
-        state.careSearch = '';
-        state.careLimit = 15;
         state.careDrafts.clear();
         state.copyEdits.clear();
-        state.selectedMembers.clear();
+        state.studioMemberId = state.members[0]?.id || null;
         state.generationErrors = [];
         closeModal();
         render();
@@ -291,7 +287,7 @@ function reset() {
 }
 
 const controlSelector =
-    '[data-view], [data-product-filter], [data-task-filter], [data-filter], [data-member], [data-task], [data-execute], [data-goal], [data-report-goal], [data-action]';
+    '[data-view], [data-product-filter], [data-task-filter], [data-filter], [data-member], [data-task], [data-execute], [data-opportunity], [data-report-goal], [data-action]';
 
 document.addEventListener('click', (event) => {
     const control = event.target.closest(controlSelector);
@@ -304,13 +300,20 @@ document.addEventListener('click', (event) => {
         member,
         task,
         execute: approvedTask,
-        goal,
+        opportunity,
         reportGoal: targetReportGoal,
         action,
         id,
     } = control.dataset;
 
-    if (targetView) return setView(targetView);
+    if (targetView) {
+        if (control.dataset.profileId) {
+            state.profileMemberId = control.dataset.profileId;
+            state.filter = 'all';
+            state.search = '';
+        }
+        return setView(targetView);
+    }
     if (status) {
         state.taskFilter = status;
         return render();
@@ -332,10 +335,12 @@ document.addEventListener('click', (event) => {
         return render();
     }
     if (approvedTask) return chooseScenario(approvedTask);
-    if (goal) {
-        state.selectedGoal = goal;
+    if (opportunity) {
+        state.selectedOpportunity = opportunity;
         render();
-        document.querySelector(`[data-goal="${goal}"]`).focus({ preventScroll: true });
+        document
+            .querySelector(`[data-opportunity="${opportunity}"]`)
+            .focus({ preventScroll: true });
         return;
     }
     if (targetReportGoal) {
@@ -353,25 +358,10 @@ document.addEventListener('click', (event) => {
             return render();
         case 'retry-member':
             return loadMemberExtra(id);
-        case 'care-filter':
-            state.careFilter = id;
-            state.careLimit = 15;
-            return render();
-        case 'more-care':
-            state.careLimit += 15;
-            return render();
-        case 'care-history':
-            document.getElementById('care-history').open = true;
-            return document.getElementById('care-history').scrollIntoView({ block: 'start' });
         case 'studio-member':
-            if (!state.members.some((member) => member.id === id && canContact(member)))
-                return toast('会员未通过联系资格检查');
-            if (!state.selectedMembers.has(id) && state.selectedMembers.size >= 5)
-                return toast('每批最多 5 位会员，请先调整名单');
-            state.selectedMembers.add(id);
+            if (!state.members.some((member) => member.id === id)) return;
+            state.studioMemberId = id;
             return setView('studio');
-        case 'catalog':
-            return catalogModal();
         case 'bind-product-image':
             closeModal();
             setView('products');
@@ -381,24 +371,13 @@ document.addEventListener('click', (event) => {
                 .getElementById('product-image-file')
                 .scrollIntoView({ block: 'center' });
         case 'generate-copy':
-            return generateFor([...state.selectedMembers]);
-        case 'clear-selected':
-            state.selectedMembers.clear();
-            return render();
-        case 'remove-selected':
-            state.selectedMembers.delete(id);
-            return render();
+            return generateFor();
         case 'upload-product-image':
             return uploadProductImage();
         case 'save-copy':
             return saveCopy(id);
         case 'copy-message':
             return saveCopy(id, true);
-        case 'regenerate-copy': {
-            const draft = state.copyDrafts.find((draft) => String(draft.id) === id);
-            if (draft) return generateFor([draft.memberId], draft.model);
-            return;
-        }
         case 'menu': {
             const open = document.body.classList.toggle('menu-open');
             control.setAttribute('aria-expanded', String(open));
@@ -421,10 +400,6 @@ document.addEventListener('click', (event) => {
             return execute(id);
         case 'reset':
             return reset();
-        case 'care':
-            return careModal();
-        case 'newtask':
-            return addMemberTask(id);
         case 'approve':
             return approve(id);
         case 'reject':
@@ -454,17 +429,15 @@ document.addEventListener('submit', (event) => {
 
 document.addEventListener('change', (event) => {
     const input = event.target;
-    if (input.dataset.selectMember) {
-        if (input.checked && state.selectedMembers.size >= 5) {
-            input.checked = false;
-            return toast('每批最多选择 5 位会员');
-        }
-        if (input.checked) state.selectedMembers.add(input.dataset.selectMember);
-        else state.selectedMembers.delete(input.dataset.selectMember);
+    if (input.id === 'studio-member') {
+        state.studioMemberId = input.value;
         render();
-        return;
     }
     if (input.id === 'ai-model') state.selectedModel = input.value;
+    if (input.id === 'copy-style') {
+        state.selectedCopyStyle = input.value;
+        toast('文案风格已选择，点击生成按钮后生效');
+    }
     if (input.id === 'plan-limit') {
         state.planLimit = Number(input.value);
         render();
@@ -499,9 +472,8 @@ document.addEventListener('input', (event) => {
     }
     const careForm = input.closest('#care-form');
     if (careForm) rememberCareDraft(careForm);
-    if (!['member-search', 'care-search', 'product-search'].includes(input.id)) return;
+    if (!['member-search', 'product-search'].includes(input.id)) return;
     if (input.id === 'member-search') state.search = input.value;
-    else if (input.id === 'care-search') state.careSearch = input.value;
     else {
         state.productSearch = input.value;
         state.productPage = 1;

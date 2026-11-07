@@ -191,9 +191,6 @@ input[type='radio'] {
 .check-label input {
     margin: 0;
 }
-.growth-opportunity-tabs {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-}
 .card-check {
     display: flex;
     gap: 7px;
@@ -810,17 +807,6 @@ input[type='radio'] {
         max-height: 390px;
         overflow-y: auto;
     }
-    .growth-opportunity-tabs {
-        grid-template-columns: repeat(3, minmax(0, 1fr));
-    }
-    .growth-opportunity-tabs button:first-child {
-        grid-column: auto;
-        flex-direction: column;
-    }
-    .growth-opportunity-tabs button {
-        border-right: 1px solid var(--line);
-        border-bottom: 0 !important;
-    }
 }
 @media (max-width: 650px) {
     .page-head h2 {
@@ -876,5 +862,212 @@ input[type='radio'] {
     }
     .rep-stat b {
         font-size: 34px;
+    }
+}
+
+/* 单会员工作台：草稿、配图与反馈都围绕当前会员，不铺开历史记录。 */
+.studio-single {
+    grid-template-columns: minmax(250px, 0.75fr) minmax(0, 1.5fr);
+    gap: 24px;
+}
+.studio-single .wb-context,
+.studio-single .wb-output {
+    padding: 24px;
+}
+.studio-single .wb-context > h3 {
+    margin: 0 0 18px;
+    font-size: 21px;
+}
+.studio-single .wb-field select {
+    width: 100%;
+    font-size: 13px;
+}
+.studio-single .wb-member {
+    margin: 20px 0 15px;
+}
+.studio-single .wb-facts > div {
+    padding: 5px 0;
+    grid-template-columns: 76px minmax(0, 1fr);
+}
+.studio-single .wb-note-section {
+    padding-top: 18px;
+}
+.studio-single .wb-note-section p {
+    font-size: 13px;
+    line-height: 1.85;
+    margin: 0 0 8px;
+}
+.studio-single .wb-output-header {
+    margin-bottom: 14px;
+    padding-bottom: 14px;
+}
+.studio-single .wb-generate-row {
+    margin: 14px 0;
+}
+.studio-single .copy-result {
+    padding: 0;
+    border: 0;
+}
+.studio-single .studio-reason {
+    margin: 10px 0 15px;
+    padding: 9px 12px;
+    background: transparent;
+}
+.studio-single .studio-reason p {
+    font-size: 12px;
+    line-height: 1.8;
+}
+.studio-single .copy-result > label {
+    display: block;
+    margin: 12px 0 8px;
+}
+.studio-single .copy-result > textarea {
+    min-height: 140px;
+    max-height: 280px;
+    font-size: 14px;
+    line-height: 1.85;
+}
+.studio-single .copy-products {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 10px;
+    margin: 14px 0;
+}
+.studio-single .copy-product {
+    display: grid;
+    grid-template-columns: 64px minmax(0, 1fr);
+    align-items: start;
+    gap: 10px;
+    padding: 10px;
+}
+.studio-single .copy-product img {
+    width: 64px;
+    height: 86px;
+    object-fit: cover;
+}
+.studio-single .copy-product-info {
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+}
+.studio-single .copy-product-info strong {
+    font-size: 13px;
+    line-height: 1.6;
+}
+.studio-single .copy-product-info span,
+.studio-single .copy-product-info a {
+    font-size: 11px;
+    line-height: 1.6;
+    overflow-wrap: anywhere;
+}
+.studio-single .wb-customer-preview {
+    margin: 14px 0;
+    padding: 11px 14px;
+}
+.studio-single .wb-customer-preview summary {
+    font-size: 13px;
+}
+.studio-single .wb-chat-message {
+    position: static;
+    display: block;
+    width: 100%;
+    min-width: 0;
+    max-height: 150px;
+    overflow: auto;
+    margin-top: 12px;
+    padding: 12px;
+    font-size: 14px;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+}
+.studio-single .wb-note {
+    font-size: 11px;
+    margin-top: 10px;
+}
+.studio-single .wb-followup {
+    margin-top: 20px;
+    padding: 11px 14px;
+}
+.studio-single .wb-followup > summary {
+    font-size: 15px;
+}
+.studio-single .wb-followup form {
+    padding-top: 14px;
+}
+.studio-single .wb-followup textarea {
+    min-height: 90px;
+}
+.studio-empty {
+    padding: 32px 18px;
+    font-size: 14px;
+}
+@media (max-width: 1000px) {
+    .studio-single {
+        grid-template-columns: 1fr;
+    }
+}
+@media (max-width: 650px) {
+    .studio-single .wb-context,
+    .studio-single .wb-output {
+        padding: 18px 16px;
+    }
+    .studio-single .copy-products {
+        grid-template-columns: 1fr;
+    }
+    .studio-single .wb-generate-row {
+        flex-direction: row;
+        align-items: center;
+        gap: 10px;
+    }
+    .studio-single .wb-generate-row p {
+        font-size: 11px;
+    }
+    .studio-single .wb-generate-row button {
+        font-size: 12px;
+        padding: 8px 10px;
+    }
+}
+
+/* 模型选择与生成并排，复用原有多模型 API，不扩展工作台页面长度。 */
+.studio-ai-controls {
+    display: flex;
+    align-items: flex-end;
+    gap: 12px;
+    margin: 15px 0;
+}
+.studio-ai-controls > div {
+    flex: 1;
+    min-width: 0;
+}
+.studio-ai-controls > .studio-style-control {
+    flex: 0.65;
+}
+.studio-ai-controls label {
+    display: block;
+    font-size: 12px;
+    color: var(--muted);
+    margin-bottom: 6px;
+}
+.studio-ai-controls select {
+    width: 100%;
+    font-size: 13px;
+}
+.studio-ai-controls > button {
+    flex-shrink: 0;
+}
+@media (max-width: 650px) {
+    .studio-ai-controls {
+        gap: 8px;
+        flex-wrap: wrap;
+    }
+    .studio-ai-controls > div {
+        flex-basis: 55%;
+    }
+    .studio-ai-controls > .studio-style-control {
+        flex-basis: 35%;
+    }
+    .studio-ai-controls > button {
+        padding: 9px 10px;
+        font-size: 12px;
     }
 }

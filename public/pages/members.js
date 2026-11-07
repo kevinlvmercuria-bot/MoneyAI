@@ -32,13 +32,7 @@ function membersPage() {
     if (!state.members.some((member) => member.id === state.profileMemberId))
         state.profileMemberId = state.members[0]?.id;
     const visible = filtered.slice((state.page - 1) * perPage, state.page * perPage);
-    return `${head(
-        '会员档案',
-        'MEMBERS',
-        '消费记录、偏好和沟通细节，让每一次联系都有依据。',
-        `<button class="btn" data-view="studio">打开话术工作台 · 已选 ${state.selectedMembers.size} 人</button>`,
-    )}
-            <div class="member-layout"><section class="member-column">
+    return `            <div class="member-layout"><section class="member-column">
                 <div class="toolbar"><label class="search">${icon('search')}<input id="member-search" placeholder="搜索编号、姓名、风格或历史备注" value="${escapeHtml(state.search)}" aria-label="搜索会员"></label></div>
                 <div class="tabs">${[
                     ['all', '全部'],
@@ -61,7 +55,7 @@ function membersPage() {
                             (
                                 member,
                             ) => `<div class="member-row ${state.profileMemberId === member.id ? 'active' : ''}">
-                    <input type="checkbox" data-select-member="${member.id}" aria-label="选择 ${member.id}" ${state.selectedMembers.has(member.id) ? 'checked' : ''} ${canContact(member) ? '' : 'disabled title="未通过联系资格"'}>
+
                     <button class="profile-open" data-action="focus-member" data-id="${member.id}">
                         <span class="avatar">${escapeHtml((member.displayName || member.id).slice(0, 1))}</span>
                         <span><strong>${escapeHtml(member.displayName || member.id)}</strong> ${chip(member.lifecycle)}
@@ -70,8 +64,8 @@ function membersPage() {
                         )
                         .join('') || '<div class="empty">没有找到符合条件的会员</div>'
                 }</div>
-                <div class="list-foot"><span>共 ${num(filtered.length)} 位 · 已勾选 ${state.selectedMembers.size} 位</span><div class="pagination"><button class="btn outline small" data-action="prev" ${state.page <= 1 ? 'disabled' : ''}>上一页</button><span>${state.page}/${pages}</span><button class="btn outline small" data-action="next" ${state.page >= pages ? 'disabled' : ''}>下一页</button></div></div>
-                <p class="helper">复选框用于挑选 AI 文案名单，最多 5 人；点击姓名查看档案。</p>
+                <div class="list-foot"><span>共 ${num(filtered.length)} 位</span><div class="pagination"><button class="btn outline small" data-action="prev" ${state.page <= 1 ? 'disabled' : ''}>上一页</button><span>${state.page}/${pages}</span><button class="btn outline small" data-action="next" ${state.page >= pages ? 'disabled' : ''}>下一页</button></div></div>
+                <p class="helper">点击姓名查看档案，再为这位会员准备沟通。</p>
             </section>${memberProfile(state.members.find((member) => member.id === state.profileMemberId))}</div>`;
 }
 
@@ -88,7 +82,10 @@ function memberProfile(member) {
                 ['储值余额', money(member.bal)],
                 ['历史消费', member.visits + ' 次'],
             ]
-                .map(([label, value]) => `<div><small>${label}</small><strong>${value}</strong></div>`)
+                .map(
+                    ([label, value]) =>
+                        `<div><small>${label}</small><strong>${value}</strong></div>`,
+                )
                 .join('')}</div>
             <section class="detail-section"><div class="section-label"><h3>个人复购节奏</h3><span class="pill">平均 ${member.cycle} 天</span></div>
                 <div class="cycle-bar"><span style="width:${Math.min(100, (member.days / Math.max(1, member.cycle)) * 30)}%"></span></div>
@@ -125,7 +122,7 @@ async function memberModal(id) {
     if (!m) return;
     const p = productFor(m, state.products);
     modal(
-        `${headModal('MEMBER PROFILE · DEMO', m.id + ' · 会员详情')}<div style="display:flex;gap:9px;align-items:center">${chip(m.lifecycle)}<span class="tiny-note">${m.level} · ${m.style} / ${m.secondary}</span></div><div class="detailgrid"><div class="detailitem"><small>距离最近到店</small><strong>${m.days} 天</strong></div><div class="detailitem"><small>平均复购周期</small><strong>${m.cycle} 天</strong></div><div class="detailitem"><small>复购偏离</small><strong>${m.ratio} ×</strong></div><div class="detailitem"><small>累计消费</small><strong>${money(m.spend)}</strong></div><div class="detailitem"><small>储值余额</small><strong>${money(m.bal)}</strong></div><div class="detailitem"><small>历史消费次数</small><strong>${m.visits} 次</strong></div></div><div class="sectlabel">经营判断与数据依据</div><div class="quote">${m.days} 天未到店，平均 ${m.cycle} 天到店一次；当前分类为「${LIFECYCLE_LABELS[m.lifecycle]}」。${canContact(m) ? '已通过初步营销资格过滤，可考虑人工审核后进行个性化关怀。' : !m.consent ? '未获营销授权，已从经营目标候选中排除。' : '当前存在营销资格限制，暂不应营销触达。'}<br/>授权：${m.consent ? '已同意' : '未同意'} · 近期联系：${m.contactDays} 天前 · 未处理投诉：${m.complaint ? '有' : '无'} · 未来预约：${m.appointment ? '有' : '无'}</div><div class="sectlabel">匹配产品参考</div><div class="quote">${p ? `${p.name} · ${p.style} · ${money(p.price)}（演示产品目录）` : '暂无匹配款式'}</div><div id="member-source-details" data-id="${m.id}">正在加载历史记录…</div><div class="modal-actions"><button class="btn outline" data-action="close">关闭</button><button class="btn outline" data-action="prepare-care" data-id="${m.id}" ${!canContact(m) || m.careHandled ? 'disabled' : ''}>沟通准备</button><button class="btn" data-action="newtask" data-id="${m.id}" ${!canContact(m) ? 'disabled title="未通过营销资格"' : ''}>加入待审核任务</button></div>`,
+        `${headModal('MEMBER PROFILE · DEMO', m.id + ' · 会员详情')}<div style="display:flex;gap:9px;align-items:center">${chip(m.lifecycle)}<span class="tiny-note">${m.level} · ${m.style} / ${m.secondary}</span></div><div class="detailgrid"><div class="detailitem"><small>距离最近到店</small><strong>${m.days} 天</strong></div><div class="detailitem"><small>平均复购周期</small><strong>${m.cycle} 天</strong></div><div class="detailitem"><small>复购偏离</small><strong>${m.ratio} ×</strong></div><div class="detailitem"><small>累计消费</small><strong>${money(m.spend)}</strong></div><div class="detailitem"><small>储值余额</small><strong>${money(m.bal)}</strong></div><div class="detailitem"><small>历史消费次数</small><strong>${m.visits} 次</strong></div></div><div class="sectlabel">经营判断与数据依据</div><div class="quote">${m.days} 天未到店，平均 ${m.cycle} 天到店一次；当前分类为「${LIFECYCLE_LABELS[m.lifecycle]}」。${canContact(m) ? '已通过初步营销资格过滤，可考虑人工审核后进行个性化关怀。' : !m.consent ? '未获营销授权，已从经营目标候选中排除。' : '当前存在营销资格限制，暂不应营销触达。'}<br/>授权：${m.consent ? '已同意' : '未同意'} · 近期联系：${m.contactDays} 天前 · 未处理投诉：${m.complaint ? '有' : '无'} · 未来预约：${m.appointment ? '有' : '无'}</div><div class="sectlabel">匹配产品参考</div><div class="quote">${p ? `${p.name} · ${p.style} · ${money(p.price)}（演示产品目录）` : '暂无匹配款式'}</div><div id="member-source-details" data-id="${m.id}">正在加载历史记录…</div><div class="modal-actions"><button class="btn outline" data-action="close">关闭</button><button class="btn outline" data-action="prepare-care" data-id="${m.id}" ${!canContact(m) || m.careHandled ? 'disabled' : ''}>沟通准备</button></div>`,
     );
     try {
         const details = await api(`/members/${id}/details`);
@@ -133,7 +130,8 @@ async function memberModal(id) {
         if (container?.dataset.id === id) container.innerHTML = sourceHistory(details);
     } catch (error) {
         const container = document.getElementById('member-source-details');
-        if (container?.dataset.id === id) container.textContent = '历史资料加载失败：' + error.message;
+        if (container?.dataset.id === id)
+            container.textContent = '历史资料加载失败：' + error.message;
     }
 }
 

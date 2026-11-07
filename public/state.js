@@ -1,5 +1,3 @@
-import { canContact } from './rules-client.js';
-
 export const state = {
     members: [],
     tasks: [],
@@ -7,13 +5,13 @@ export const state = {
     careRecords: [],
     products: [],
     dataSource: {},
-    careMemberId: null,
     careDrafts: new Map(),
     saving: false,
     copyDrafts: [],
     aiConfig: { models: [], configured: false },
     selectedModel: '',
-    selectedMembers: new Set(),
+    selectedCopyStyle: 'friendly',
+    studioMemberId: 'M0001',
     copyEdits: new Map(),
     generationErrors: [],
     view: 'dashboard',
@@ -22,12 +20,9 @@ export const state = {
     page: 1,
     taskFilter: 'all',
     profileMemberId: 'M0001',
-    careFilter: 'pending',
-    careSearch: '',
-    careLimit: 15,
     memberDetailsCache: new Map(),
     memberDetailsLoading: new Set(),
-    selectedGoal: 'wake',
+    selectedOpportunity: 'all',
     reportGoal: 'all',
     planLimit: 3,
     productSearch: '',
@@ -52,10 +47,8 @@ function applyState(snapshot) {
     if (previousSource !== state.dataSource.sourceHash) state.memberDetailsCache.clear();
     if (!state.aiConfig.models.some((model) => model.id === state.selectedModel))
         state.selectedModel = state.aiConfig.defaultModel || '';
-    for (const id of state.selectedMembers) {
-        if (!state.members.some((member) => member.id === id && canContact(member)))
-            state.selectedMembers.delete(id);
-    }
+    if (!state.aiConfig.styles?.some((style) => style.id === state.selectedCopyStyle))
+        state.selectedCopyStyle = state.aiConfig.defaultStyle || 'friendly';
 }
 
 export { applyState };

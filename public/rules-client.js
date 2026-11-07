@@ -15,4 +15,11 @@ export const {
     buildReviewTask,
     DEMO_DATE,
     CARE_OUTCOMES,
+    OPPORTUNITIES,
+    availableOpportunityMembers,
+    matchesOpportunity,
+    opportunityCandidates,
+    opportunityFor,
+    opportunityProduct,
+    buildOpportunityTask,
 } = globalThis.NailMateRules;

@@ -40,13 +40,14 @@ async function state(tx) {
             JSON_VALUE(payload, '$.last_service_type') AS lastService,
             JSON_VALUE(payload, '$.preferred_care_service') AS preferredService,
             JSON_VALUE(payload, '$.recommended_followup_date') AS followupDate,
-            JSON_VALUE(payload, '$.care_followup_status') AS status
+            JSON_VALUE(payload, '$.care_followup_status') AS status,
+            JSON_VALUE(payload, '$.care_followup_opt_in') AS optIn
         FROM dbo.SourceRecords WHERE source_table = 'member_care_profiles';
     `);
     const careRecords = recordsets[3];
     const careByMember = new Map(careRecords.map((record) => [record.memberId, record]));
     const images = new Map(recordsets[7].map((image) => [image.productId, image.imageId]));
-    const careProfiles = new Map(recordsets[8].map((profile) => [profile.memberId, profile]));
+    const careProfiles = new Map(recordsets[8].map((profile) => [profile.memberId, { ...profile, optIn: ['true', '1'].includes(profile.optIn) }]));
     return {
         members: recordsets[0].map((row) => {
             const member = JSON.parse(row.profile);

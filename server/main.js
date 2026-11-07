@@ -5,6 +5,7 @@ const express = require('express');
 const { sql, connect, transaction } = require('./db');
 const store = require('./store');
 const { GOALS, SCENARIOS, MAX_TASKS_PER_ANALYSIS, DEMO_DATE, CARE_OUTCOMES, canContact, goalCandidates, buildReviewTask } = require('../public/rules');
+const { OPPORTUNITIES, opportunityCandidates, buildOpportunityTask, matchesOpportunity } = require('../public/rules');
 
 function requireCondition(condition, status, message) {
     if (!condition) throw Object.assign(new Error(message), { apiStatus: status });
@@ -49,21 +50,25 @@ function createApp(pool, options = {}) {
     }
 
     app.post('/api/tasks', mutate(async (req, tx, { members, tasks, products }) => {
-        const { goal, memberIds } = req.body ?? {};
-        requireCondition(typeof goal === 'string' && (goal === 'general' || Object.hasOwn(GOALS, goal)) &&
+        const { goal, opportunity, memberIds } = req.body ?? {};
+        const byOpportunity = Object.hasOwn(req.body ?? {}, 'opportunity');
+        const validTarget = byOpportunity
+            ? goal === undefined && typeof opportunity === 'string' && Object.hasOwn(OPPORTUNITIES, opportunity)
+            : typeof goal === 'string' && (goal === 'general' || Object.hasOwn(GOALS, goal));
+        requireCondition(validTarget &&
             Array.isArray(memberIds) && memberIds.length > 0 && memberIds.length <= MAX_TASKS_PER_ANALYSIS &&
             memberIds.every((id) => typeof id === 'string' && /^M\d{4}$/.test(id)) &&
             new Set(memberIds).size === memberIds.length && (goal !== 'general' || memberIds.length === 1),
         400, '请选择有效的目标及会员，每批最多 5 人');
 
-        const candidates = goal === 'general'
+        const candidates = byOpportunity ? opportunityCandidates(members, tasks, opportunity) : goal === 'general'
             ? members.filter((member) => member.id === memberIds[0] && canContact(member) &&
                 !tasks.some((task) => task.memberId === member.id && task.status !== 'rejected'))
             : goalCandidates(members, tasks, goal, products);
         const selected = candidates.filter((member) => memberIds.includes(member.id));
         requireCondition(selected.length === memberIds.length, 409, '候选名单已变化，或会员不符合联系资格。请刷新后重试');
         for (const member of selected) {
-            const task = buildReviewTask(member, null, goal, products);
+            const task = byOpportunity ? buildOpportunityTask(member, opportunity, products) : buildReviewTask(member, null, goal, products);
             await store.insertTask(tx, task);
             await store.log(tx, 'create_review_task', `${member.id} · ${task.strategy} · 加入待审核`);
         }
@@ -80,6 +85,8 @@ function createApp(pool, options = {}) {
     function checkContact(current, task) {
         const member = current.members.find((item) => item.id === task.memberId);
         requireCondition(member && canContact(member), 409, '会员已不满足营销资格');
+        if (task.strategy === OPPORTUNITIES.care.label)
+            requireCondition(matchesOpportunity(member, 'care'), 409, '会员已不满足护理回访资格');
     }
 
     app.post('/api/tasks/:id/review', mutate(async (req, tx, current) => {

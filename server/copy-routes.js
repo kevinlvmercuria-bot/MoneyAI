@@ -47,11 +47,12 @@ function registerImageRoutes(app, pool) {
 function registerCopyRoutes(app, pool, generate = ai.generateCopy) {
     let generating = false;
     app.post('/api/copy/generate', async (req, res) => {
-        const { memberIds, model } = req.body ?? {};
+        const { memberIds, model, style = ai.metadata().defaultStyle } = req.body ?? {};
         check(Array.isArray(memberIds) && memberIds.length > 0 && memberIds.length <= 5 &&
             memberIds.every((id) => typeof id === 'string' && /^M\d{4}$/.test(id)) && new Set(memberIds).size === memberIds.length,
         400, '请勾选 1 至 5 位不同会员');
         check(ai.metadata().models.some((item) => item.id === model), 400, '请选择可用模型');
+        check(ai.metadata().styles.some((item) => item.id === style), 400, '请选择可用的文案风格');
         check(!generating, 409, '已有一批文案正在生成，请稍后重试');
         generating = true;
         const items = [], errors = [];
@@ -63,7 +64,7 @@ function registerCopyRoutes(app, pool, generate = ai.generateCopy) {
             // 网络请求在事务外执行，避免慢模型调用占用数据库锁。
             for (const member of selected) {
                 try {
-                    const generated = await generate({ member, products: initial.products, model });
+                    const generated = await generate({ member, products: initial.products, model, style });
                     const result = ai.parseResult(JSON.stringify(generated), ai.availableProducts(initial.products));
                     const id = await transaction(pool, async (tx) => {
                         const current = await store.state(tx);

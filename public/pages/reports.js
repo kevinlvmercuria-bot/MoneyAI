@@ -1,6 +1,7 @@
 import { state } from '../state.js';
 import { GOALS, money } from '../rules-client.js';
 import { escapeHtml, num, planProgress } from '../components.js';
+import { careHistory } from './care.js';
 
 function reports() {
     const scoped =
@@ -43,7 +44,7 @@ function reports() {
                       .join('')}</tbody></table></div>`
                 : '<div class="empty">还没有执行结果。先完成「生成计划 → 人工审核 → 模拟触达」。<p><button data-view="dashboard">去准备复购计划</button><button data-view="campaigns">去任务审核</button></p></div>'
         }</section>
-        <section class="section-spacer"><h3>顾客反馈与后续计划</h3><p>反馈、负责人和跟进日期保存在护理跟进，遵守原有联系资格与冷却规则。</p><button data-view="care">查看关怀记录与后续计划 →</button></section>`;
+        <section class="section-spacer"><h3>顾客反馈与后续计划</h3>${careHistory()}</section>`;
 }
 
 export { reports };
