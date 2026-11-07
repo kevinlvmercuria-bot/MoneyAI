@@ -1,5 +1,5 @@
 import { applyState, state } from './state.js';
-import { closeModal, escapeHtml, icon, num, toast } from './components.js';
+import { closeModal, escapeHtml, num, toast } from './components.js';
 import { api } from './api.js';
 import { SCENARIOS, canContact } from './rules-client.js';
 import { dashboard } from './pages/dashboard.js';
@@ -8,6 +8,7 @@ import { careModal, carePage } from './pages/care.js';
 import { catalogModal, studioPage } from './pages/studio.js';
 import { campaigns, chooseScenario, taskModal } from './pages/campaigns.js';
 import { reports } from './pages/reports.js';
+import { productsPage } from './pages/products.js';
 
 async function save(path, body, onSuccess) {
     if (state.saving) return;
@@ -54,6 +55,7 @@ async function save(path, body, onSuccess) {
 }
 
 function setView(v) {
+    closeModal();
     state.view = v;
     document.body.classList.remove('menu-open');
     document.getElementById('menu-toggle')?.setAttribute('aria-expanded', 'false');
@@ -64,7 +66,8 @@ function setView(v) {
 
 function prepareCare(id) {
     const member = state.members.find((member) => member.id === id);
-    if (!member || !canContact(member) || member.careHandled) return toast('会员已处理或不满足联系资格');
+    if (!member || !canContact(member) || member.careHandled)
+        return toast('会员已处理或不满足联系资格');
     state.careMemberId = id;
     closeModal();
     if (state.view !== 'care') setView('care');
@@ -162,20 +165,30 @@ function saveCopy(id, copy = false) {
 
 function render() {
     const pages = {
-        dashboard: ['经营驾驶舱', 'home', dashboard],
-        members: ['会员档案', 'users', membersPage],
-        care: ['护理跟进', 'heart', carePage],
-        studio: ['话术工作台', 'spark', studioPage],
-        campaigns: ['任务审核', 'tasks', campaigns],
-        reports: ['效果复盘', 'chart', reports],
+        dashboard: [
+            '今日复购计划',
+            'THE STUDIO',
+            dashboard,
+            '今天联系谁，带什么款式，接下来怎么跟。',
+        ],
+        members: ['会员档案', 'OUR MEMBERS', membersPage, '记得她的偏爱，也关心她的近况。'],
+        campaigns: ['任务审核', 'PERSONAL TOUCH', campaigns, '先确认人和话术，再安排一次联系。'],
+        reports: ['复购结果', 'STUDIO JOURNAL', reports, '从一条问候，到一次预约，再到真正到店。'],
+        products: ['产品库', 'THE COLLECTION', productsPage, '把喜欢的款式，收进门店的灵感册。'],
+        studio: ['话术工作台', 'PERSONAL NOTES', studioPage, '把了解，变成一段自然的沟通。'],
+        care: ['护理跟进', 'AFTER THE VISIT', carePage, '聊完之后，把顾客反馈与下一步记下来。'],
     };
     document.getElementById('content').innerHTML = pages[state.view][2]();
     document.getElementById('page-title').textContent = pages[state.view][0];
+    document.getElementById('page-motto').textContent = pages[state.view][3];
+    document.getElementById('edition-name').textContent = pages[state.view][1];
+    document.getElementById('page-index').textContent =
+        `${String(Object.keys(pages).indexOf(state.view) + 1).padStart(2, '0')} / 工作空间`;
     const pending = state.tasks.filter((task) => task.status === 'pending_review').length;
     document.querySelector('#sidebar .nav').innerHTML = Object.entries(pages)
         .map(
-            ([key, [label, ico]]) =>
-                `<button data-view="${key}" class="${state.view === key ? 'active' : ''}" ${state.view === key ? 'aria-current="page"' : ''}>${icon(ico)}<span class="nav-label">${label}</span>${key === 'campaigns' && pending ? `<span class="nav-count">${pending}</span>` : ''}</button>`,
+            ([key, [label]], index) =>
+                `<button data-view="${key}" class="${state.view === key ? 'active' : ''}" ${state.view === key ? 'aria-current="page"' : ''}>${String(index + 1).padStart(2, '0')}<span>${label}</span>${key === 'campaigns' && pending ? `<span id="pending-badge">${pending}</span>` : ''}</button>`,
         )
         .join('');
     document.querySelectorAll('[data-member-count]').forEach((element) => {
@@ -257,6 +270,12 @@ function reset() {
         state.taskFilter = 'all';
         state.selectedGoal = 'wake';
         state.reportGoal = 'all';
+        state.planLimit = 3;
+        state.selectedTaskId = null;
+        state.productSearch = '';
+        state.productFilter = 'all';
+        state.productPage = 1;
+        state.productsWithoutImage = false;
         state.careMemberId = null;
         state.careFilter = 'pending';
         state.careSearch = '';
@@ -272,7 +291,7 @@ function reset() {
 }
 
 const controlSelector =
-    '[data-view], [data-task-filter], [data-filter], [data-member], [data-task], [data-execute], [data-goal], [data-report-goal], [data-action]';
+    '[data-view], [data-product-filter], [data-task-filter], [data-filter], [data-member], [data-task], [data-execute], [data-goal], [data-report-goal], [data-action]';
 
 document.addEventListener('click', (event) => {
     const control = event.target.closest(controlSelector);
@@ -301,7 +320,17 @@ document.addEventListener('click', (event) => {
         return setView('members');
     }
     if (member) return memberModal(member);
-    if (task) return taskModal(task);
+    if (task) {
+        if (state.view !== 'campaigns') return taskModal(task);
+        closeModal();
+        state.selectedTaskId = task;
+        return render();
+    }
+    if (control.dataset.productFilter) {
+        state.productFilter = control.dataset.productFilter;
+        state.productPage = 1;
+        return render();
+    }
     if (approvedTask) return chooseScenario(approvedTask);
     if (goal) {
         state.selectedGoal = goal;
@@ -345,10 +374,12 @@ document.addEventListener('click', (event) => {
             return catalogModal();
         case 'bind-product-image':
             closeModal();
-            setView('studio');
-            document.querySelector('.ai-tools details').open = true;
+            setView('products');
+            document.getElementById('product-upload').open = true;
             document.getElementById('image-product').value = id;
-            return document.getElementById('product-image-file').scrollIntoView({ block: 'center' });
+            return document
+                .getElementById('product-image-file')
+                .scrollIntoView({ block: 'center' });
         case 'generate-copy':
             return generateFor([...state.selectedMembers]);
         case 'clear-selected':
@@ -402,6 +433,10 @@ document.addEventListener('click', (event) => {
         case 'prev':
             state.page += action === 'next' ? 1 : -1;
             return render();
+        case 'product-next':
+        case 'product-prev':
+            state.productPage += action === 'product-next' ? 1 : -1;
+            return render();
     }
 });
 
@@ -430,6 +465,20 @@ document.addEventListener('change', (event) => {
         return;
     }
     if (input.id === 'ai-model') state.selectedModel = input.value;
+    if (input.id === 'plan-limit') {
+        state.planLimit = Number(input.value);
+        render();
+    }
+    if (input.id === 'task-filter') {
+        state.taskFilter = input.value;
+        state.selectedTaskId = null;
+        render();
+    }
+    if (input.id === 'products-without-image') {
+        state.productsWithoutImage = input.checked;
+        state.productPage = 1;
+        render();
+    }
 });
 
 document.addEventListener('change', (event) => {
@@ -450,9 +499,13 @@ document.addEventListener('input', (event) => {
     }
     const careForm = input.closest('#care-form');
     if (careForm) rememberCareDraft(careForm);
-    if (!['member-search', 'care-search'].includes(input.id)) return;
+    if (!['member-search', 'care-search', 'product-search'].includes(input.id)) return;
     if (input.id === 'member-search') state.search = input.value;
-    else state.careSearch = input.value;
+    else if (input.id === 'care-search') state.careSearch = input.value;
+    else {
+        state.productSearch = input.value;
+        state.productPage = 1;
+    }
     state.page = 1;
     const { selectionStart, selectionEnd } = input;
     render();

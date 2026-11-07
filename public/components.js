@@ -1,8 +1,14 @@
 import { money } from './rules-client.js';
+import { productImage } from './product-images.js';
 
 let toastTimer;
 
-const LIFECYCLE_LABELS = { active: '活跃', due: '待复购', low_frequency: '低频', dormant: '沉睡' },
+const LIFECYCLE_LABELS = {
+        active: '活跃',
+        due: '待复购',
+        low_frequency: '低频',
+        dormant: '沉睡',
+    },
     TASK_STATUS_LABELS = {
         pending_review: '待审核',
         approved: '已通过',
@@ -59,7 +65,24 @@ function toast(txt) {
 }
 
 function head(title, kicker, sub, right = '') {
-    return `<header class="page-head"><div><h1>${title}</h1><p>${sub}</p></div>${right ? `<div class="button-row">${right}</div>` : ''}</header>`;
+    return `<div class="wb-heading page-head"><div><h2>${title}</h2><p>${sub}</p></div>${right ? `<div class="button-row">${right}</div>` : ''}</div>`;
+}
+
+function planProgress(tasks) {
+    const count = (status) => tasks.filter((task) => task.status === status).length;
+    return `<div class="growth-process" aria-label="复购行动进度"><div><span>发现机会</span><b>名单已准备</b></div><span aria-hidden="true">→</span><button data-view="campaigns"><span>人工审核</span><b>${count('pending_review')} 条待确认</b></button><span aria-hidden="true">→</span><button data-view="campaigns"><span>模拟触达</span><b>${count('approved')} 条待执行</b></button><span aria-hidden="true">→</span><button data-view="reports"><span>追踪复购</span><b>${count('executed_simulated')} 条已有结果</b></button></div>`;
+}
+
+function productPhoto(product) {
+    const image = productImage(product);
+    return `<div class="wb-product-photo">${image ? `<img src="${escapeHtml(image.url)}" alt="${escapeHtml(product.name)}${image.reference ? ' · 网络参考图' : ' · 门店上传图'}" loading="lazy">` : '<span>产品实拍<br>待上传</span>'}</div>`;
+}
+
+function productCredit(product) {
+    const image = productImage(product);
+    return image?.reference
+        ? `<a class="catalog-photo-credit" href="${escapeHtml(image.sourceUrl)}" target="_blank" rel="noopener noreferrer">网络参考图来源 · ${escapeHtml(new URL(image.sourceUrl).hostname.replace(/^www\./, ''))} ↗</a>`
+        : `<span class="helper">${image ? '门店上传图' : '产品实拍待上传'}</span>`;
 }
 
 function metric(label, value, meta) {
@@ -83,12 +106,22 @@ function sourceHistory(details) {
     const sections = [
         [
             '最近消费记录',
-            details.orders.map((row) => [row.order_date, row.style, money(row.amount), row.technician]),
+            details.orders.map((row) => [
+                row.order_date,
+                row.style,
+                money(row.amount),
+                row.technician,
+            ]),
         ],
         ['会员备注', details.notes.map((row) => [row.created_at, row.note_text, row.author_name])],
         [
             '历史联系',
-            details.contacts.map((row) => [row.contact_date, row.channel, row.outcome, row.staff_name]),
+            details.contacts.map((row) => [
+                row.contact_date,
+                row.channel,
+                row.outcome,
+                row.staff_name,
+            ]),
         ],
         [
             '预约记录',
@@ -127,4 +160,7 @@ export {
     sourceHistory,
     LIFECYCLE_LABELS,
     TASK_STATUS_LABELS,
+    planProgress,
+    productPhoto,
+    productCredit,
 };

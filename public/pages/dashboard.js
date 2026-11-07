@@ -1,98 +1,59 @@
 import { state } from '../state.js';
-import { GOALS, buildReviewTask, canContact, goalCandidates } from '../rules-client.js';
-import { LIFECYCLE_LABELS, escapeHtml, icon, metric, num } from '../components.js';
-
-function metrics() {
-    const counts = Object.fromEntries(
-        ['active', 'due', 'low_frequency', 'dormant'].map((s) => [
-            s,
-            state.members.filter((m) => m.lifecycle === s).length,
-        ]),
-    );
-    return {
-        counts,
-        eligibleDormant: state.members.filter((m) => m.lifecycle === 'dormant' && canContact(m)).length,
-        balanced: state.members.filter((m) => m.bal > 0).length,
-        high: state.members.filter((m) => m.spend >= 1800).length,
-        pending: state.tasks.filter((t) => t.status === 'pending_review').length,
-        executed: state.tasks.filter((t) => t.status === 'executed_simulated').length,
-    };
-}
-
-function goalPanel() {
-    const candidates = goalCandidates(state.members, state.tasks, state.selectedGoal, state.products);
-    const tabs = Object.entries(GOALS)
-        .map(
-            ([key, goal]) =>
-                `<button class="filterbtn ${state.selectedGoal === key ? 'active' : ''}" aria-pressed="${state.selectedGoal === key}" data-goal="${key}">${goal.label}</button>`,
-        )
-        .join('');
-    const cards = candidates
-        .map((member, index) => {
-            const draft = buildReviewTask(member, null, state.selectedGoal, state.products);
-            return `<article class="hanger" data-candidate="${member.id}" style="--drop:${index % 2 ? 22 : 8}px">
-                <div class="cord" aria-hidden="true"></div><div class="tilt"><div class="card">
-                    <div class="face front" aria-hidden="false">
-                        <div class="meta">${member.id} / ${LIFECYCLE_LABELS[member.lifecycle]}</div>
-                        <div class="monogram" aria-hidden="true">${member.id.slice(-2)}</div>
-                        <h3>${member.style} · ${member.level}</h3>
-                        <div class="days"><b>${member.days}</b><span>天未到店</span></div>
-                        <p class="cycle">个人周期 ${member.cycle} 天 · 偏离 ${member.ratio} 倍</p>
-                        <p class="reason" title="${escapeHtml(draft.reason)}">${escapeHtml(draft.reason)}</p>
-                        <div class="actions">
-                            <button data-action="flip" data-id="${member.id}" aria-label="查看 ${member.id} 摘要">摘要 ↻</button>
-                            <label class="card-check"><input type="checkbox" name="candidate" value="${member.id}" checked>加入名单</label>
-                        </div>
-                    </div>
-                    <div class="face back" inert aria-hidden="true">
-                        <div class="meta">${member.id} / 沟通准备</div>
-                        <h3>${GOALS[state.selectedGoal].label}</h3>
-                        <h4>规则生成的邀约</h4><p>${escapeHtml(draft.message)}</p>
-                        <p class="quiet">入队后由店主修改并审核。</p>
-                        <div class="actions">
-                            <button data-action="prepare-care" data-id="${member.id}">沟通准备 ↓</button>
-                            <button data-action="flip" data-id="${member.id}" aria-label="返回 ${member.id} 正面">返回 ↶</button>
-                        </div>
-                    </div>
-                </div></div>
-            </article>`;
-        })
-        .join('');
-    return `<section class="goal-panel" id="goal-panel" aria-labelledby="goal-heading">
-            <div class="section-head"><div><p class="eyebrow">PERSONAL TOUCH / 今日计划</p><h2 id="goal-heading">给每次联系，一个合适的理由。</h2></div></div>
-            <div class="goal-tabs" aria-label="经营目标">${tabs}</div>
-            <p class="care-note">${candidates.length ? `推荐 ${candidates.length} 人，每次最多加入 5 人。翻到背面查看沟通摘要，勾选后加入待审核。` : '当前没有可入队的会员。会员需命中目标、通过联系资格检查且没有有效任务。'}</p>
-            <div id="care-wall" aria-label="推荐会员关怀卡">${cards}</div>
-            <div class="workspace-actions"><button class="btn" data-action="queue-goal" ${candidates.length ? '' : 'disabled'}>加入待审核</button></div>
-        </section>`;
-}
+import {
+    GOALS,
+    buildReviewTask,
+    canContact,
+    goalCandidates,
+    matchesGoal,
+    money,
+    productFor,
+} from '../rules-client.js';
+import { LIFECYCLE_LABELS, escapeHtml, num, planProgress } from '../components.js';
 
 function dashboard() {
-    const stats = metrics();
-    const distribution = Object.entries(stats.counts)
-        .map(
-            ([lifecycle, count], i) =>
-                `<div class="life-row"><span>${LIFECYCLE_LABELS[lifecycle]}</span><div class="track"><span style="width:${(count / Math.max(1, state.members.length)) * 100}%;background:${['#a7c5b0', '#ddba88', '#cd9bb2', '#95657f'][i]}"></span></div><strong>${num(count)}</strong></div>`,
+    const occupied = new Set(
+        state.tasks.filter((task) => task.status !== 'rejected').map((task) => task.memberId),
+    );
+    const available = state.members.filter(
+        (member) => canContact(member) && !member.careHandled && !occupied.has(member.id),
+    );
+    const counts = Object.fromEntries(
+        Object.keys(GOALS).map((goal) => [
+            goal,
+            available.filter((member) => matchesGoal(member, goal, state.products)).length,
+        ]),
+    );
+    const picks = goalCandidates(
+        state.members,
+        state.tasks,
+        state.selectedGoal,
+        state.products,
+    ).slice(0, state.planLimit);
+    const pending = state.tasks.filter((task) => task.status === 'pending_review').length;
+    return `<section class="growth-intro"><div><h2>${picks.length ? `今天，先联系这 ${picks.length} 位会员。` : '这类机会，暂时没有待处理会员。'}</h2><p>从 <strong>${num(state.members.length)}</strong> 位会员中，按周期、偏好和联系资格准备。<br>每人一份理由，审核后再安排联系。</p></div><aside class="growth-daily-note"><p><strong>${num(counts[state.selectedGoal])}</strong> 位待经营 · 本次安排 ${picks.length} 人</p><small>已排除联系限制、已排队和本次已处理的会员</small><button class="primary" data-action="queue-goal" ${picks.length ? '' : 'disabled'}>生成本次复购计划 · 加入待审核</button><small>使用规则草稿；真实 AI 文案可到话术工作台生成</small></aside></section>
+        ${planProgress(state.tasks)}
+        <section class="growth-opportunities"><div class="growth-section-title"><h2>先解决哪一种机会？</h2><p>同一会员可能符合多个机会，人数不相加。</p></div><div class="growth-opportunity-tabs" role="group" aria-label="选择经营机会">${Object.entries(
+            GOALS,
         )
-        .join('');
-    return `<section class="welcome"><div><h1>不只记得款式，<br>也记得每位顾客的小细节。</h1>
-            <p>从会员复购节奏、消费偏好和护理档案，找到合适的关怀机会。</p>
-            <button class="btn" data-action="analyze">${icon('spark')}运行经营分析</button></div>
-            <div class="welcome-aside"><strong>今天，从一次自然的问候开始。</strong><p>挑选会员，准备文案和产品图，再由店主决定怎样联系。</p></div></section>
-            <section class="metrics">${metric('会员总数', state.members.length, '数据库中的虚拟会员档案')}${metric('可联系沉睡会员', stats.eligibleDormant, '已过滤联系资格限制')}${metric('持有储值余额', stats.balanced, '权益提醒不等于新增收入')}${metric('待审核任务', stats.pending, '由店主做最后决定')}</section>
-            <div class="dash-grid"><section class="panel"><div class="panel-head"><h2>会员生命周期</h2><button class="text-btn" data-view="members">查看会员 ↗</button></div>${distribution}</section>
-            <section class="panel"><div class="panel-head"><h2>把了解变成下一步</h2></div>
-            ${[
-                ['users', '会员档案', '查看偏好、消费和历史备注。', 'members'],
-                ['heart', '护理跟进', '记录本人反馈与后续计划。', 'care'],
-                ['spark', '话术工作台', '为选中会员生成文案与产品配图。', 'studio'],
-            ]
-                .map(
-                    ([ico, title, text, target]) =>
-                        `<div class="recommend-row"><div class="recommend-icon">${icon(ico)}</div><div><h3>${title}</h3><p>${text}</p></div><button class="text-btn" data-view="${target}" aria-label="打开${title}">↗</button></div>`,
-                )
-                .join('')}
-            </section></div>${goalPanel()}`;
+            .map(
+                ([key, goal]) =>
+                    `<button data-goal="${key}" aria-pressed="${state.selectedGoal === key}"><span>${goal.label}</span><b>${num(counts[key])}</b></button>`,
+            )
+            .join('')}</div></section>
+        <section class="growth-priority goal-panel" id="goal-panel" aria-labelledby="goal-heading"><div class="section-head"><div><h2 id="goal-heading">${GOALS[state.selectedGoal].label} · 优先名单</h2><p class="muted">先看谁需要回来，再决定聊什么。</p></div><div class="count-control"><label for="plan-limit">本次安排</label><select id="plan-limit">${[3, 4, 5].map((n) => `<option ${state.planLimit === n ? 'selected' : ''}>${n}</option>`).join('')}</select></div></div>
+        ${picks.length ? `<div id="care-wall" aria-label="今日优先联系会员">${picks.map(candidateCard).join('')}</div>` : '<div class="empty">已排除未授权、有投诉、有未来预约、联系间隔不足及已有任务的会员。可切换经营目标，或先完成已有审核任务。<p><button data-view="campaigns">查看已有任务</button></p></div>'}
+        <p class="care-note">勾选名单后再加入待审核，每次最多 5 人。沉睡与新品按周期偏离排序，余额提醒按账面余额排序；同分按会员编号排列。余额是已有权益，不计为新增收入。</p></section>
+        <section class="growth-bottom"><div><h3>剩下的事，让流程接住</h3><p>打开会员的工作台准备 AI 文案，或记录反馈、负责人和跟进日期。完成审核与模拟执行后，回来看预约、到店和消费。</p><div class="button-row"><button data-view="campaigns">查看 ${pending} 条待审核任务</button><button data-view="reports">查看复购结果</button><button data-view="care">关怀记录与后续计划</button></div></div></section>`;
+}
+
+function candidateCard(member, index) {
+    const draft = buildReviewTask(member, null, state.selectedGoal, state.products);
+    const product = productFor(member, state.products, state.selectedGoal === 'launch');
+    const name = escapeHtml(member.displayName || member.id);
+    return `<article class="hanger" data-candidate="${member.id}" style="--drop:${index % 2 ? 22 : 8}px"><div class="cord" aria-hidden="true"></div><div class="tilt"><div class="card">
+        <div class="face front" aria-hidden="false"><div class="meta">${member.id} / ${LIFECYCLE_LABELS[member.lifecycle]}</div><div class="monogram" aria-hidden="true">${escapeHtml((member.displayName || member.id).slice(0, 1))}</div><h3>${name}</h3><div class="days"><b>${member.days}</b><span>天未到店</span></div><p class="cycle">个人周期 ${member.cycle} 天 · 偏离 ${member.ratio} 倍</p><p class="growth-card-goal">${GOALS[state.selectedGoal].label}</p><p class="growth-card-product">${state.selectedGoal === 'balance' ? `可用余额 ${money(member.bal)}` : `推荐 ${escapeHtml(product?.name || '先了解本人需求')}`}</p><label class="card-check"><input type="checkbox" name="candidate" value="${member.id}" checked>加入本次名单</label><div class="actions"><button data-action="flip" data-id="${member.id}" aria-label="查看 ${member.id} 推荐依据">查看依据 ↻</button><button class="primary" data-action="studio-member" data-id="${member.id}">准备沟通 →</button></div></div>
+        <div class="face back" inert aria-hidden="true"><div class="meta">${member.id} / ${GOALS[state.selectedGoal].label}</div><h3>${name}</h3><h4>为什么先联系她</h4><p>${escapeHtml(draft.reason)}</p><h4>本次规则草稿</h4><p>${escapeHtml(draft.message)}</p><p class="quiet">${escapeHtml(member.latestNote || `偏好${member.style} · 已通过联系资格检查`)}</p><div class="actions"><button class="primary" data-action="prepare-care" data-id="${member.id}">记录沟通反馈</button><button data-action="flip" data-id="${member.id}" aria-label="返回 ${member.id} 正面">返回 ↶</button></div></div>
+    </div></div></article>`;
 }
 
 export { dashboard };

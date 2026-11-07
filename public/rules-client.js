@@ -9,6 +9,7 @@ export const {
     canContact,
     priorityScore,
     productFor,
+    matchesGoal,
     goalReason,
     goalCandidates,
     buildReviewTask,

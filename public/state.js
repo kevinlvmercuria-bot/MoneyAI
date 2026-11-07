@@ -29,6 +29,12 @@ export const state = {
     memberDetailsLoading: new Set(),
     selectedGoal: 'wake',
     reportGoal: 'all',
+    planLimit: 3,
+    productSearch: '',
+    productFilter: 'all',
+    productsWithoutImage: false,
+    productPage: 1,
+    selectedTaskId: null,
 };
 
 function applyState(snapshot) {
