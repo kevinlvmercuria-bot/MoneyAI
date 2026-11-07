@@ -78,3 +78,28 @@ IF OBJECT_ID(N'dbo.MemberProfileBackups', N'U') IS NULL
 
 IF OBJECT_ID(N'dbo.MemberImportStage', N'U') IS NULL
     CREATE TABLE dbo.MemberImportStage (id varchar(5) NOT NULL PRIMARY KEY, profile nvarchar(max) NOT NULL);
+
+IF OBJECT_ID(N'dbo.ProductImages', N'U') IS NULL
+BEGIN
+    CREATE TABLE dbo.ProductImages (
+        id int IDENTITY(1,1) NOT NULL PRIMARY KEY,
+        product_id varchar(40) NOT NULL,
+        content_type varchar(30) NOT NULL,
+        image_data varbinary(max) NOT NULL,
+        created_at datetime2 NOT NULL DEFAULT SYSUTCDATETIME()
+    );
+    CREATE INDEX IX_ProductImages_Product ON dbo.ProductImages(product_id, id DESC);
+END;
+
+IF OBJECT_ID(N'dbo.CopyDrafts', N'U') IS NULL
+    CREATE TABLE dbo.CopyDrafts (
+        id int IDENTITY(1,1) NOT NULL PRIMARY KEY,
+        member_id varchar(5) NOT NULL REFERENCES dbo.Members(id),
+        model nvarchar(100) NOT NULL,
+        message nvarchar(1000) NOT NULL,
+        original_message nvarchar(1000) NOT NULL,
+        reason nvarchar(500) NOT NULL,
+        product_ids nvarchar(max) NOT NULL CHECK (ISJSON(product_ids) = 1),
+        created_at datetime2 NOT NULL DEFAULT SYSUTCDATETIME(),
+        copied_at datetime2 NULL
+    );

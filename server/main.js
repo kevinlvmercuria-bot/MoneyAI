@@ -10,15 +10,18 @@ function requireCondition(condition, status, message) {
     if (!condition) throw Object.assign(new Error(message), { apiStatus: status });
 }
 
-function createApp(pool) {
+function createApp(pool, options = {}) {
     const app = express();
     app.disable('x-powered-by');
+    const { registerImageRoutes, registerCopyRoutes } = require('./copy-routes');
+    registerImageRoutes(app, pool);
     app.use('/api', express.json({ limit: '16kb' }));
     app.use('/api', (req, res, next) => {
         res.set('Cache-Control', 'no-store');
         requireCondition(req.method !== 'POST' || req.is('application/json'), 415, '请使用 application/json');
         next();
     });
+    const copyService = registerCopyRoutes(app, pool, options.generateCopy);
 
     app.get('/api/state', async (_req, res) => {
         res.json(await transaction(pool, store.state, 'Shared'));
@@ -132,12 +135,13 @@ function createApp(pool) {
     }));
 
     app.post('/api/reset', mutate(async (_req, tx) => {
+        requireCondition(!copyService.isGenerating(), 409, '文案正在生成，请结束后再重置');
         // 关怀限制由记录派生；清空记录后从基础会员资料恢复初始演示资格。
         await tx.request().query('DELETE FROM dbo.CareRecords;');
         const { members } = await store.state(tx);
         const demoMember = members.find((member) => member.id === 'M0001');
         requireCondition(demoMember, 409, '请先初始化演示会员');
-        await tx.request().query('DELETE FROM dbo.OperationLogs; DELETE FROM dbo.Tasks;');
+        await tx.request().query('DELETE FROM dbo.CopyDrafts; DELETE FROM dbo.OperationLogs; DELETE FROM dbo.Tasks;');
         await store.seedTask(tx, demoMember);
     }));
 

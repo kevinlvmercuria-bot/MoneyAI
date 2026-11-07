@@ -1,6 +1,19 @@
 (() => {
     'use strict';
-    const { GOALS, SCENARIOS, DEMO_SERVICE_PRICE, money, canContact, priorityScore, productFor, goalReason, goalCandidates, buildReviewTask, DEMO_DATE, CARE_OUTCOMES } = NailMateRules;
+    const {
+        GOALS,
+        SCENARIOS,
+        DEMO_SERVICE_PRICE,
+        money,
+        canContact,
+        priorityScore,
+        productFor,
+        goalReason,
+        goalCandidates,
+        buildReviewTask,
+        DEMO_DATE,
+        CARE_OUTCOMES,
+    } = NailMateRules;
     const LIFECYCLE_LABELS = { active: '活跃', due: '待复购', low_frequency: '低频', dormant: '沉睡' },
         TASK_STATUS_LABELS = {
             pending_review: '待审核',
@@ -28,11 +41,28 @@
     let careMemberId = null;
     const careDrafts = new Map();
     let saving = false;
+    let copyDrafts = [];
+    let aiConfig = { models: [], configured: false };
+    let selectedModel = '';
+    const selectedMembers = new Set();
+    const copyEdits = new Map();
+    let generationErrors = [];
 
     async function api(path, body) {
-        const options = body === undefined ? {} : {
-            method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
-        };
+        const options =
+            body instanceof Blob
+                ? {
+                      method: 'POST',
+                      headers: { 'Content-Type': body.type },
+                      body,
+                  }
+                : body === undefined
+                  ? {}
+                  : {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(body),
+                    };
         const response = await fetch('/api' + path, options);
         const payload = await response.json();
         if (!response.ok) {
@@ -42,20 +72,47 @@
     }
 
     function applyState(state) {
-        ({ members, tasks, logs, careRecords = [], products = [], dataSource = {} } = state);
+        const previousSource = dataSource.sourceHash;
+        ({
+            members,
+            tasks,
+            logs,
+            careRecords = [],
+            products = [],
+            dataSource = {},
+            copyDrafts = [],
+            ai: aiConfig = { models: [], configured: false },
+        } = state);
+        if (previousSource !== dataSource.sourceHash) memberDetailsCache.clear();
+        if (!aiConfig.models.some((model) => model.id === selectedModel))
+            selectedModel = aiConfig.defaultModel || '';
+        for (const id of selectedMembers) {
+            if (!members.some((member) => member.id === id && canContact(member)))
+                selectedMembers.delete(id);
+        }
     }
 
     async function save(path, body, onSuccess) {
         if (saving) return;
         saving = true;
-        const buttons = Array.from(document.querySelectorAll('button:not(:disabled)'));
-        buttons.forEach((button) => { button.disabled = true; });
+        const controls = Array.from(
+            document.querySelectorAll(
+                'button:not(:disabled), input:not(:disabled), select:not(:disabled), textarea:not(:disabled)',
+            ),
+        );
+        controls.forEach((control) => {
+            control.disabled = true;
+        });
         document.getElementById('app').setAttribute('aria-busy', 'true');
-        toast('正在保存，请稍候…');
+        toast(path === '/copy/generate' ? 'AI 正在生成文案，请稍候…' : '正在保存，请稍候…');
+        if (path === '/copy/generate') {
+            const status = document.getElementById('ai-generation-status');
+            if (status) status.textContent = '正在逐位生成，请等待本批完成。';
+        }
         try {
             const response = await api(path, body);
             applyState(response.state);
-            onSuccess(response);
+            await onSuccess(response);
         } catch (error) {
             if (error.status === 409) {
                 try {
@@ -70,8 +127,12 @@
             toast(error.message || '连接服务器失败');
         } finally {
             saving = false;
-            buttons.forEach((button) => { if (button.isConnected) button.disabled = false; });
+            controls.forEach((control) => {
+                if (control.isConnected) control.disabled = false;
+            });
             document.getElementById('app').removeAttribute('aria-busy');
+            const status = document.getElementById('ai-generation-status');
+            if (status) status.textContent = '';
         }
     }
 
@@ -80,6 +141,12 @@
         search = '',
         page = 1,
         taskFilter = 'all';
+    let profileMemberId = 'M0001';
+    let careFilter = 'pending';
+    let careSearch = '';
+    let careLimit = 15;
+    const memberDetailsCache = new Map();
+    const memberDetailsLoading = new Set();
     let selectedGoal = 'wake';
     let reportGoal = 'all';
     let toastTimer;
@@ -104,7 +171,7 @@
         file: '<path d="M5 2h9l5 5v15H5zM14 2v5h5M8 12h8M8 16h8"/>',
     };
     function icon(k) {
-        return `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICONS[k] || ICONS.spark}</svg>`;
+        return `<svg class="ico" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICONS[k] || ICONS.spark}</svg>`;
     }
     function chip(s) {
         return `<span class="chip ${escapeHtml(s)}">${escapeHtml(TASK_STATUS_LABELS[s] || LIFECYCLE_LABELS[s] || s)}</span>`;
@@ -121,13 +188,13 @@
     function setView(v) {
         view = v;
         document.body.classList.remove('menu-open');
-        document.getElementById('menu-toggle').setAttribute('aria-expanded', 'false');
+        document.getElementById('menu-toggle')?.setAttribute('aria-expanded', 'false');
         page = 1;
         render();
         window.scrollTo(0, 0);
     }
     function head(title, kicker, sub, right = '') {
-        return right ? `<div class="workspace-actions">${right}</div>` : '';
+        return `<header class="page-head"><div><h1>${title}</h1><p>${sub}</p></div>${right ? `<div class="button-row">${right}</div>` : ''}</header>`;
     }
 
     function metrics() {
@@ -146,18 +213,22 @@
             executed: tasks.filter((t) => t.status === 'executed_simulated').length,
         };
     }
-    function metric(label, value, meta, ico = 'users') {
-        return `<div class="metric"><div class="metric-head"><label>${label}</label><span class="mini-ico">${icon(ico)}</span></div><div class="metric-number">${num(value)}<small>人${label.includes('任务') ? ' / 项' : ''}</small></div><div class="metric-meta">${meta}</div></div>`;
+    function metric(label, value, meta) {
+        return `<div class="metric"><label>${label}</label><strong>${num(value)}</strong><small>${meta}</small></div>`;
     }
 
     function goalPanel() {
         const candidates = goalCandidates(members, tasks, selectedGoal, products);
-        const tabs = Object.entries(GOALS).map(([key, goal]) =>
-            `<button class="filterbtn ${selectedGoal === key ? 'active' : ''}" aria-pressed="${selectedGoal === key}" data-goal="${key}">${goal.label}</button>`
-        ).join('');
-        const cards = candidates.map((member, index) => {
-            const draft = buildReviewTask(member, null, selectedGoal, products);
-            return `<article class="hanger" data-candidate="${member.id}" style="--drop:${index % 2 ? 22 : 8}px">
+        const tabs = Object.entries(GOALS)
+            .map(
+                ([key, goal]) =>
+                    `<button class="filterbtn ${selectedGoal === key ? 'active' : ''}" aria-pressed="${selectedGoal === key}" data-goal="${key}">${goal.label}</button>`,
+            )
+            .join('');
+        const cards = candidates
+            .map((member, index) => {
+                const draft = buildReviewTask(member, null, selectedGoal, products);
+                return `<article class="hanger" data-candidate="${member.id}" style="--drop:${index % 2 ? 22 : 8}px">
                 <div class="cord" aria-hidden="true"></div><div class="tilt"><div class="card">
                     <div class="face front" aria-hidden="false">
                         <div class="meta">${member.id} / ${LIFECYCLE_LABELS[member.lifecycle]}</div>
@@ -183,7 +254,8 @@
                     </div>
                 </div></div>
             </article>`;
-        }).join('');
+            })
+            .join('');
         return `<section class="goal-panel" id="goal-panel" aria-labelledby="goal-heading">
             <div class="section-head"><div><p class="eyebrow">PERSONAL TOUCH / 今日计划</p><h2 id="goal-heading">给每次联系，一个合适的理由。</h2></div></div>
             <div class="goal-tabs" aria-label="经营目标">${tabs}</div>
@@ -195,14 +267,15 @@
 
     function prepareCare(id) {
         const member = members.find((member) => member.id === id);
-        if (!member || !canContact(member) || member.careHandled) return toast('会员已处理或不满足联系资格');
+        if (!member || !canContact(member) || member.careHandled)
+            return toast('会员已处理或不满足联系资格');
         careMemberId = id;
         closeModal();
-        if (view !== 'dashboard') setView('dashboard');
+        if (view !== 'care') setView('care');
         else render();
         const section = document.getElementById('care-preparation');
-        section.scrollIntoView({block: 'start'});
-        section.querySelector('h2').focus({preventScroll: true});
+        section.scrollIntoView({ block: 'start' });
+        section.querySelector('h2').focus({ preventScroll: true });
     }
 
     function carePreparation() {
@@ -211,8 +284,9 @@
         const draft = careDrafts.get(member.id) || {};
         const earliest = new Date(DEMO_DATE);
         earliest.setUTCDate(earliest.getUTCDate() + 14);
-        const options = CARE_OUTCOMES.map((outcome) =>
-            `<option ${outcome === (draft.outcome || '已沟通') ? 'selected' : ''}>${outcome}</option>`
+        const options = CARE_OUTCOMES.map(
+            (outcome) =>
+                `<option ${outcome === (draft.outcome || '已沟通') ? 'selected' : ''}>${outcome}</option>`,
         ).join('');
         return `<section id="care-preparation" class="section-spacer" aria-label="沟通准备单">
             <div class="detail-head"><div><p class="eyebrow">PREPARE TO CONNECT / ${member.id}</p>
@@ -242,11 +316,15 @@
     }
 
     function careHistory() {
-        const rows = careRecords.map((record) => `<tr>
+        const rows = careRecords
+            .map(
+                (record) => `<tr>
             <td>${record.memberId}</td><td>${record.outcome}</td>
             <td class="wrap">${escapeHtml(record.note)}</td><td>${escapeHtml(record.owner)}</td>
             <td>${record.followUp || '未安排'}</td><td>${record.recordedAsOf}</td>
-        </tr>`).join('');
+        </tr>`,
+            )
+            .join('');
         return `<details id="care-history" ${careRecords.length ? 'open' : ''}>
             <summary>关怀记录与后续计划 · ${careRecords.length} 条</summary>
             ${rows ? `<div class="table-wrap"><table><thead><tr><th>会员</th><th>处理结果</th><th>反馈 / 原因</th><th>负责人</th><th>计划跟进</th><th>记录基准日</th></tr></thead><tbody>${rows}</tbody></table></div>` : '<p class="helper">还没有关怀记录。</p>'}
@@ -257,19 +335,23 @@
     function saveCare(form) {
         const data = new FormData(form);
         const memberId = form.dataset.memberId;
-        return save('/care-records', {
-            memberId,
-            outcome: data.get('outcome'),
-            note: data.get('note'),
-            owner: data.get('owner'),
-            followUp: data.has('follow') ? data.get('date') : null,
-        }, () => {
-            careDrafts.delete(memberId);
-            careMemberId = null;
-            render();
-            document.getElementById('care-history').scrollIntoView({block: 'nearest'});
-            toast('关怀记录与后续计划已保存');
-        });
+        return save(
+            '/care-records',
+            {
+                memberId,
+                outcome: data.get('outcome'),
+                note: data.get('note'),
+                owner: data.get('owner'),
+                followUp: data.has('follow') ? data.get('date') : null,
+            },
+            () => {
+                careDrafts.delete(memberId);
+                careMemberId = null;
+                render();
+                document.getElementById('care-history').scrollIntoView({ block: 'nearest' });
+                toast('关怀记录与后续计划已保存');
+            },
+        );
     }
 
     function flipCard(id) {
@@ -283,67 +365,359 @@
         back.inert = !flipped;
         front.setAttribute('aria-hidden', String(flipped));
         back.setAttribute('aria-hidden', String(!flipped));
-        (flipped ? back : front).querySelector('[data-action="flip"]').focus({preventScroll:true});
+        (flipped ? back : front).querySelector('[data-action="flip"]').focus({ preventScroll: true });
     }
 
     function dashboard() {
         const stats = metrics();
-        const segments = Object.entries(stats.counts).map(([lifecycle, count], index) =>
-            `<div class="life-segment life-${index}" style="flex:${Math.max(1,count)}"><b>${num(count)}</b><span>${LIFECYCLE_LABELS[lifecycle]}</span></div>`
-        ).join('');
-        return `<div class="overview-grid">
-            <section><p class="eyebrow">THE STUDIO / 会员近况</p>
-                <h2>记住每一份偏爱，<br>让下一次相见<em>恰逢其时。</em></h2>
-                <p class="muted">从 ${num(members.length)} 位虚拟会员的复购节奏中，安排今天值得发出的问候。</p>
-                <div class="lifecycle-strip" aria-label="会员生命周期分布">${segments}</div>
-                <p class="helper">依据个人复购周期分类 · 已授权、无投诉、无未来预约且至少 14 天未联系才可入选。</p>
-                <button class="btn outline" data-view="members">查看会员档案 ↗</button>
-            </section>
-            <aside class="work-ticket"><p class="eyebrow">YOUR QUEUE / 工作队列</p>
-                <div class="ticket-number">${String(stats.pending).padStart(2,'0')}</div>
-                <h3>条任务，等你过目。</h3><button data-view="campaigns">进入任务审核 ↗</button>
-                <div class="ticket-row"><span>已模拟执行</span><b>${stats.executed}</b></div>
-                <div class="ticket-row"><span>持有储值余额</span><b>${num(stats.balanced)}</b></div>
-            </aside>
-        </div>${goalPanel()}${carePreparation()}${careHistory()}`;
+        const distribution = Object.entries(stats.counts)
+            .map(
+                ([lifecycle, count], i) =>
+                    `<div class="life-row"><span>${LIFECYCLE_LABELS[lifecycle]}</span><div class="track"><span style="width:${(count / Math.max(1, members.length)) * 100}%;background:${['#a7c5b0', '#ddba88', '#cd9bb2', '#95657f'][i]}"></span></div><strong>${num(count)}</strong></div>`,
+            )
+            .join('');
+        return `<section class="welcome"><div><h1>不只记得款式，<br>也记得每位顾客的小细节。</h1>
+            <p>从会员复购节奏、消费偏好和护理档案，找到合适的关怀机会。</p>
+            <button class="btn" data-action="analyze">${icon('spark')}运行经营分析</button></div>
+            <div class="welcome-aside"><strong>今天，从一次自然的问候开始。</strong><p>挑选会员，准备文案和产品图，再由店主决定怎样联系。</p></div></section>
+            <section class="metrics">${metric('会员总数', members.length, '数据库中的虚拟会员档案')}${metric('可联系沉睡会员', stats.eligibleDormant, '已过滤联系资格限制')}${metric('持有储值余额', stats.balanced, '权益提醒不等于新增收入')}${metric('待审核任务', stats.pending, '由店主做最后决定')}</section>
+            <div class="dash-grid"><section class="panel"><div class="panel-head"><h2>会员生命周期</h2><button class="text-btn" data-view="members">查看会员 ↗</button></div>${distribution}</section>
+            <section class="panel"><div class="panel-head"><h2>把了解变成下一步</h2></div>
+            ${[
+                ['users', '会员档案', '查看偏好、消费和历史备注。', 'members'],
+                ['heart', '护理跟进', '记录本人反馈与后续计划。', 'care'],
+                ['spark', '话术工作台', '为选中会员生成文案与产品配图。', 'studio'],
+            ]
+                .map(
+                    ([ico, title, text, target]) =>
+                        `<div class="recommend-row"><div class="recommend-icon">${icon(ico)}</div><div><h3>${title}</h3><p>${text}</p></div><button class="text-btn" data-view="${target}" aria-label="打开${title}">↗</button></div>`,
+                )
+                .join('')}
+            </section></div>${goalPanel()}`;
     }
 
     function membersPage() {
-        const ff = (m) =>
-            filter === 'all' ||
-            m.lifecycle === filter ||
-            (filter === 'high' && m.spend >= 1800) ||
-            (filter === 'balance' && m.bal > 0) ||
-            (filter === 'contactable' && canContact(m));
-        const arr = members.filter(
-            (m) =>
-                ff(m) &&
+        const filtered = members.filter(
+            (member) =>
+                (filter === 'all' ||
+                    member.lifecycle === filter ||
+                    (filter === 'high' && member.spend >= 1800) ||
+                    (filter === 'balance' && member.bal > 0) ||
+                    (filter === 'contactable' && canContact(member))) &&
                 (!search ||
-                    m.id.toLowerCase().includes(search.toLowerCase()) ||
-                    m.style.includes(search)),
+                    `${member.id} ${member.displayName || ''} ${member.style} ${member.latestNote || ''}`
+                        .toLowerCase()
+                        .includes(search.toLowerCase())),
         );
-        const per = 12,
-            pages = Math.max(1, Math.ceil(arr.length / per));
+        const perPage = 10,
+            pages = Math.max(1, Math.ceil(filtered.length / perPage));
         page = Math.max(1, Math.min(page, pages));
-        const showing = arr.slice((page - 1) * per, page * per);
-        return `${head('会员智能分析', 'MEMBER INTELLIGENCE', '不只看顾客多久没来，更关注她自己的复购节奏与服务偏好。', `<button class="btn" data-action="analyze">${icon('spark')} 查看经营目标</button>`)}<div class="alert">数据说明：此页面使用数据库中的 2,800 位虚拟会员；生命周期分类、得分和筛选均在本地演示计算，没有接入真实会员系统。</div><div class="toolbar"><div class="searchbox">${icon('search')}<input id="member-search" placeholder="搜索会员编号 / 美甲风格" value="${escapeHtml(search)}" aria-label="搜索会员"/></div>${[
-            ['all', '全部'],
-            ['active', '活跃'],
-            ['due', '待复购'],
-            ['low_frequency', '低频'],
-            ['dormant', '沉睡'],
-            ['high', '高价值'],
-            ['balance', '有余额'],
-            ['contactable', '可联系'],
-        ]
-            .map(
-                ([v, t]) =>
-                    `<button class="filterbtn ${filter === v ? 'active' : ''}" data-filter="${v}">${t}</button>`,
-            )
-            .join(
-                '',
-            )}</div><div class="contentpanel"><div class="panel-head" style="margin-bottom:7px"><h3>会员列表 <span style="font-weight:500">（${num(arr.length)} 位）</span></h3><span>点击会员编号查看数据与个性化建议</span></div><div class="tablewrap"><table class="data-table"><thead><tr><th>会员编号</th><th>最近到店</th><th>历史消费</th><th>平均复购周期</th><th>偏离倍数</th><th>风格偏好</th><th>生命周期</th><th>操作</th></tr></thead><tbody>${showing.map((m) => `<tr><td><button class="member-link" data-member="${m.id}">${m.id}</button><div class="rowmeta">${m.level}</div></td><td>${m.days} 天前</td><td>${money(m.spend)}</td><td>${m.cycle} 天</td><td><span class="highlight">${m.ratio}×</span></td><td>${m.style}</td><td>${chip(m.lifecycle)}</td><td><button class="btn outline small" data-member="${m.id}">查看详情</button></td></tr>`).join('')}</tbody></table></div>${arr.length ? `<div class="listfoot"><span>第 ${(page - 1) * per + 1}–${Math.min(page * per, arr.length)} 条 · 共 ${num(arr.length)} 条</span><div class="pagination"><button data-action="prev" ${page <= 1 ? 'disabled' : ''}>上一页</button><span>${page} / ${pages}</span><button data-action="next" ${page >= pages ? 'disabled' : ''}>下一页</button></div></div>` : '<div class="empty">没有找到符合条件的会员</div>'}</div>`;
+        if (!members.some((member) => member.id === profileMemberId)) profileMemberId = members[0]?.id;
+        const visible = filtered.slice((page - 1) * perPage, page * perPage);
+        return `${head(
+            '会员档案',
+            'MEMBERS',
+            '消费记录、偏好和沟通细节，让每一次联系都有依据。',
+            `<button class="btn" data-view="studio">打开话术工作台 · 已选 ${selectedMembers.size} 人</button>`,
+        )}
+            <div class="member-layout"><section class="member-column">
+                <div class="toolbar"><label class="search">${icon('search')}<input id="member-search" placeholder="搜索编号、姓名、风格或历史备注" value="${escapeHtml(search)}" aria-label="搜索会员"></label></div>
+                <div class="tabs">${[
+                    ['all', '全部'],
+                    ['active', '活跃'],
+                    ['dormant', '沉睡'],
+                    ['due', '待复购'],
+                    ['low_frequency', '低频'],
+                    ['high', '高价值'],
+                    ['balance', '有余额'],
+                    ['contactable', '可联系'],
+                ]
+                    .map(
+                        ([value, label]) =>
+                            `<button data-filter="${value}" class="${filter === value ? 'active' : ''}">${label}</button>`,
+                    )
+                    .join('')}</div>
+                <div class="member-list">${
+                    visible
+                        .map(
+                            (
+                                member,
+                            ) => `<div class="member-row ${profileMemberId === member.id ? 'active' : ''}">
+                    <input type="checkbox" data-select-member="${member.id}" aria-label="选择 ${member.id}" ${selectedMembers.has(member.id) ? 'checked' : ''} ${canContact(member) ? '' : 'disabled title="未通过联系资格"'}>
+                    <button class="profile-open" data-action="focus-member" data-id="${member.id}">
+                        <span class="avatar">${escapeHtml((member.displayName || member.id).slice(0, 1))}</span>
+                        <span><strong>${escapeHtml(member.displayName || member.id)}</strong> ${chip(member.lifecycle)}
+                        <small>${member.id} · ${escapeHtml(member.style)}<br>${member.days} 天未到店 · ${money(member.spend)}</small></span>
+                    </button></div>`,
+                        )
+                        .join('') || '<div class="empty">没有找到符合条件的会员</div>'
+                }</div>
+                <div class="list-foot"><span>共 ${num(filtered.length)} 位 · 已勾选 ${selectedMembers.size} 位</span><div class="pagination"><button class="btn outline small" data-action="prev" ${page <= 1 ? 'disabled' : ''}>上一页</button><span>${page}/${pages}</span><button class="btn outline small" data-action="next" ${page >= pages ? 'disabled' : ''}>下一页</button></div></div>
+                <p class="helper">复选框用于挑选 AI 文案名单，最多 5 人；点击姓名查看档案。</p>
+            </section>${memberProfile(members.find((member) => member.id === profileMemberId))}</div>`;
     }
+
+    function memberProfile(member) {
+        if (!member) return '<section class="panel empty">暂无会员资料</section>';
+        const care = member.careProfile;
+        return `<section class="panel detail-panel"><div class="profile-head">
+            <span class="avatar">${escapeHtml((member.displayName || member.id).slice(0, 1))}</span>
+            <div><h2>${escapeHtml(member.displayName || member.id)}</h2>${chip(member.lifecycle)}<p>${member.id} · ${escapeHtml(member.level)}</p></div>
+            <button class="text-btn" data-member="${member.id}">完整档案 ↗</button></div>
+            <div class="profile-metrics">${[
+                ['最近到店', member.days + ' 天前'],
+                ['累计消费', money(member.spend)],
+                ['储值余额', money(member.bal)],
+                ['历史消费', member.visits + ' 次'],
+            ]
+                .map(([label, value]) => `<div><small>${label}</small><strong>${value}</strong></div>`)
+                .join('')}</div>
+            <section class="detail-section"><div class="section-label"><h3>个人复购节奏</h3><span class="pill">平均 ${member.cycle} 天</span></div>
+                <div class="cycle-bar"><span style="width:${Math.min(100, (member.days / Math.max(1, member.cycle)) * 30)}%"></span></div>
+                <div class="cycle-caption"><span>距离上次到店 ${member.days} 天</span><strong>${member.ratio} 倍偏离</strong></div></section>
+            <section class="detail-section detail-two"><div><h3>偏好与权益</h3><p>${escapeHtml(member.style)} / ${escapeHtml(member.secondary)}<br>储值余额是已有权益。</p></div>
+                <div><h3>联系资格</h3><p class="pill ${canContact(member) ? 'green' : 'orange'}">${canContact(member) ? '已通过联系资格检查' : '存在联系限制，请查看完整档案'}</p></div></section>
+            <section class="detail-section"><div class="section-label"><h3>老板娘备注</h3><span class="pill gray">历史记录</span></div><p>${escapeHtml(member.latestNote || '暂无历史备注。')}</p></section>
+            <section class="detail-section"><h3>护理线索</h3><p>${escapeHtml(care?.tags || '可在完整档案中查看服务历史。')}</p>
+                ${care ? `<p class="muted">建议服务：${escapeHtml(care.preferredService)} · 来源计划日期 ${escapeHtml(care.followupDate)}</p>` : ''}</section>
+            <div id="member-profile-extra" data-id="${member.id}">${memberDetailsCache.has(member.id) ? sourceHistory(memberDetailsCache.get(member.id)) : '<p class="helper">正在读取历史资料…</p>'}</div>
+            <div class="button-row" style="margin-top:20px"><button class="btn" data-action="studio-member" data-id="${member.id}" ${canContact(member) ? '' : 'disabled'}>为这位会员准备话术</button>
+                <button class="btn outline" data-action="prepare-care" data-id="${member.id}" ${!canContact(member) || member.careHandled ? 'disabled' : ''}>沟通准备</button></div></section>`;
+    }
+
+    async function loadMemberExtra(id) {
+        if (!id || memberDetailsCache.has(id) || memberDetailsLoading.has(id)) return;
+        memberDetailsLoading.add(id);
+        try {
+            const details = await api(`/members/${id}/details`);
+            memberDetailsCache.set(id, details);
+            const container = document.getElementById('member-profile-extra');
+            if (container?.dataset.id === id) container.innerHTML = sourceHistory(details);
+        } catch (error) {
+            const container = document.getElementById('member-profile-extra');
+            if (container?.dataset.id === id)
+                container.innerHTML = `<p class="helper">历史资料加载失败。${escapeHtml(error.message)}</p><button class="btn outline small" data-action="retry-member" data-id="${id}">重新加载</button>`;
+        } finally {
+            memberDetailsLoading.delete(id);
+        }
+    }
+
+    function carePage() {
+        const records = new Map(careRecords.map((record) => [record.memberId, record]));
+        const status = (member) =>
+            !records.has(member.id)
+                ? 'pending'
+                : records.get(member.id).outcome === '暂不联系'
+                  ? 'snoozed'
+                  : 'done';
+        const queue = members
+            .filter(
+                (member) =>
+                    member.careHandled ||
+                    (member.careProfile
+                        ? member.careProfile.status !== 'not_due' &&
+                          member.careProfile.tags !== '无明确护理需求'
+                        : canContact(member) && member.ratio > 1.15),
+            )
+            .sort((a, b) =>
+                a.id === 'M0001'
+                    ? -1
+                    : b.id === 'M0001'
+                      ? 1
+                      : (a.careProfile?.followupDate || '').localeCompare(
+                            b.careProfile?.followupDate || '',
+                        ),
+            );
+        const counts = { pending: 0, done: 0, snoozed: 0 };
+        queue.forEach((member) => counts[status(member)]++);
+        const visible = queue.filter(
+            (member) =>
+                (careFilter === 'all' || status(member) === careFilter) &&
+                (!careSearch ||
+                    `${member.id} ${member.displayName || ''} ${member.careProfile?.tags || ''}`
+                        .toLowerCase()
+                        .includes(careSearch.toLowerCase())),
+        );
+        return `${head('护理后的关怀，也值得被记住。', 'CARE', '根据服务档案准备关怀，记录本人反馈与下一步计划。', '<button class="btn outline" data-action="catalog">查看产品与图片库</button>')}
+            <div class="care-summary">${[
+                ['pending', '待处理'],
+                ['done', '已记录关怀'],
+                ['snoozed', '以后再看'],
+            ]
+                .map(
+                    ([value, label]) =>
+                        `<div><strong>${num(counts[value])}</strong><span>${label}</span></div>`,
+                )
+                .join('')}</div>
+            <div class="toolbar"><label class="search">${icon('search')}<input id="care-search" aria-label="搜索护理会员" placeholder="搜索会员或护理标签" value="${escapeHtml(careSearch)}"></label></div>
+            <div class="tabs">${[
+                ['pending', '待处理'],
+                ['done', '已记录关怀'],
+                ['snoozed', '以后再看'],
+                ['all', '全部'],
+            ]
+                .map(
+                    ([value, label]) =>
+                        `<button class="${careFilter === value ? 'active' : ''}" data-action="care-filter" data-id="${value}">${label}</button>`,
+                )
+                .join('')}</div>
+            <section class="care-list">${
+                visible
+                    .slice(0, careLimit)
+                    .map((member) => {
+                        const record = records.get(member.id);
+                        return `<article class="care-row">
+                <div class="care-person"><span class="avatar">${escapeHtml((member.displayName || member.id).slice(0, 1))}</span><div><button class="member-link" data-member="${member.id}">${escapeHtml(member.displayName || member.id)} · ${member.id}</button><small>上次服务：${escapeHtml(member.careProfile?.lastService || '查看档案')}</small><small>来源跟进日期：${escapeHtml(member.careProfile?.followupDate || '未安排')}</small></div></div>
+                <div class="care-info"><h3>${escapeHtml(member.careProfile?.tags || member.style + '偏好')}</h3><p>${record ? escapeHtml(record.outcome + ' · ' + record.note) : canContact(member) ? '已通过联系资格，可准备关怀。' : '存在联系限制，请先查看档案。'}</p></div>
+                <div class="care-actions">${record ? '<button class="btn outline small" data-action="care-history">查看关怀记录</button>' : `<button class="btn secondary small" data-action="prepare-care" data-id="${member.id}" ${canContact(member) ? '' : 'disabled'}>记录关怀与跟进</button>`}
+                <button class="btn outline small" data-action="studio-member" data-id="${member.id}" ${canContact(member) ? '' : 'disabled'}>准备话术</button></div></article>`;
+                    })
+                    .join('') || '<div class="empty">当前分类暂无会员</div>'
+            }</section>
+            <div class="list-foot"><span>展示 ${Math.min(careLimit, visible.length)} / ${num(visible.length)} 位</span><button class="btn outline small" data-action="more-care" ${careLimit >= visible.length ? 'disabled' : ''}>再看 15 位</button></div>
+            ${carePreparation()}${careHistory()}`;
+    }
+
+    function studioPage() {
+        const contexts = [...selectedMembers]
+            .map((id) => members.find((member) => member.id === id))
+            .filter(Boolean);
+        return `${head('把了解，变成一句自然的沟通。', 'STUDIO', '选择会员与模型，生成每人专属的文案和产品配图。', '<button class="btn outline" data-action="catalog">产品与图片库</button>')}
+            <div class="studio-grid"><section class="studio-context">
+                <section class="panel"><div class="panel-head"><h2>本次沟通名单</h2><button class="text-btn" data-view="members">挑选会员 ↗</button></div>
+                ${contexts.map((member) => `<div class="context-list"><div><dt>${escapeHtml(member.displayName || member.id)} · ${member.id}</dt><dd>${member.days} 天未到店 · 平均 ${member.cycle} 天<br>${escapeHtml(member.style)} / ${escapeHtml(member.secondary)}</dd></div></div>`).join('') || '<p class="helper">先到会员档案勾选，或从档案中为单人准备话术。</p>'}</section>${aiPanel()}</section>
+                <section class="studio-output"><div class="output-header"><div><h2>沟通草稿与配图</h2><p>核对、修改，再复制给客户。</p></div><span class="pill">AI 辅助 · 人工核对</span></div><div class="output-body">${copyResults()}</div></section></div>`;
+    }
+
+    function catalogModal() {
+        modal(
+            `${headModal('PRODUCT LIBRARY', '产品与图片库')}<div class="catalog-grid">${products.map((product) => `<article class="product-tile"><div class="product-image">${product.imageUrl ? `<img src="${escapeHtml(product.imageUrl)}" alt="${escapeHtml(product.name)}" loading="lazy">` : '<small>产品实拍待上传</small>'}</div><div class="product-tile-body"><h3>${escapeHtml(product.name)}</h3><p>${escapeHtml(product.description || product.style)}</p><div class="product-tile-footer"><strong>${money(product.price)}</strong><button class="btn outline small" data-action="bind-product-image" data-id="${escapeHtml(product.id)}">绑定图片</button></div></div></article>`).join('')}</div>`,
+        );
+    }
+
+    function aiPanel() {
+        const selected = [...selectedMembers]
+            .map(
+                (id) =>
+                    `<button class="filterbtn" data-action="remove-selected" data-id="${id}" aria-label="取消选择 ${id}">${id} ×</button>`,
+            )
+            .join('');
+        return `<section class="panel ai-tools" aria-label="个性化文案">
+            <div class="panel-head"><h3>为选中会员生成文案与配图</h3><span>每批最多 5 人 · 店主自行复制发送</span></div>
+            <p class="helper">先按活跃度或风格筛选，勾选会员后生成。每位会员分别匹配产品，生成结果供店主核对和修改。</p>
+            <div class="ai-controls">
+                <label for="ai-model">生成模型</label>
+                <select id="ai-model">${aiConfig.models.map((model) => `<option value="${escapeHtml(model.id)}" ${model.id === selectedModel ? 'selected' : ''}>${escapeHtml(model.label)}</option>`).join('')}</select>
+                <button class="btn" data-action="generate-copy" ${selectedMembers.size && aiConfig.configured ? '' : 'disabled'}>生成选中会员文案</button>
+                <button class="btn outline" data-action="clear-selected">清空选择</button>
+            </div>
+            <div id="selected-members" class="goal-tabs">${selected || '<span class="helper">尚未勾选会员，可跨页选择。</span>'}</div>
+            <p id="ai-generation-status" role="status"></p>
+            ${aiConfig.configured ? '' : '<p class="notice">请在后端配置 AI_API_KEY 并重启服务。</p>'}
+            <details><summary>上传产品图并绑定产品</summary>
+                <p class="helper">支持 PNG、JPEG、WebP，单张最多 5 MB。上传后该产品使用最新图片。</p>
+                <div class="ai-controls">
+                    <label for="image-product">产品</label>
+                    <select id="image-product">${products.map((product) => `<option value="${escapeHtml(product.id)}">${escapeHtml(product.name)} · ${product.imageUrl ? '已有图片' : '待补图'}</option>`).join('')}</select>
+                    <input type="file" id="product-image-file" accept="image/png,image/jpeg,image/webp" aria-label="选择产品图片">
+                    <button class="btn outline" data-action="upload-product-image">上传并绑定</button>
+                </div>
+            </details>
+        </section>`;
+    }
+
+    function copyResults() {
+        const cards = copyDrafts.map((draft) => {
+            const member = members.find((member) => member.id === draft.memberId);
+            const pictures = draft.productIds
+                .map((id) => {
+                    const product = products.find((product) => product.id === id);
+                    if (!product)
+                        return `<p class="notice">产品 ${escapeHtml(id)} 已从目录移除，请重新生成。</p>`;
+                    return `<div class="copy-product">
+                    ${
+                        product.imageUrl
+                            ? `<img src="${escapeHtml(product.imageUrl)}" alt="${escapeHtml(product.name)}" loading="lazy">
+                        <a class="filterbtn" href="${escapeHtml(product.imageUrl)}?download=1" download>下载图片</a>`
+                            : '<div class="image-placeholder">该产品待补图</div>'
+                    }
+                    <strong>${escapeHtml(product.name)}</strong><span>${money(product.price)}</span>
+                </div>`;
+                })
+                .join('');
+            return `<article class="panel copy-result" data-copy-result="${draft.id}">
+                <div class="panel-head"><h3>${member?.displayName ? escapeHtml(member.displayName) + ' · ' : ''}${draft.memberId} · 个性化文案</h3><span>${escapeHtml(draft.model)}</span></div>
+                <p class="helper">${escapeHtml(draft.reason)}</p>
+                <label for="copy-message-${draft.id}">发送前核对并修改文案</label>
+                <textarea id="copy-message-${draft.id}" data-copy-edit="${draft.id}" maxlength="1000">${escapeHtml(copyEdits.get(String(draft.id)) ?? draft.message)}</textarea>
+                <div class="channel-preview"><div class="chat-head"><span class="avatar">店</span>顾客沟通预览</div><div class="chat-bubble" data-chat-preview="${draft.id}">${escapeHtml(copyEdits.get(String(draft.id)) ?? draft.message)}</div></div><div class="copy-products">${pictures}</div>
+                <div class="button-row">
+                    <button class="btn" data-action="copy-message" data-id="${draft.id}" ${member && canContact(member) ? '' : 'disabled'}>复制文案</button>
+                    <button class="btn outline" data-action="save-copy" data-id="${draft.id}">保存修改</button>
+                    <button class="btn outline" data-action="regenerate-copy" data-id="${draft.id}" ${member && canContact(member) ? '' : 'disabled'}>重新生成</button>
+                </div>
+                <p class="helper">${draft.copiedAt ? '已复制素材' : '尚未复制'} · 图片需单独下载后发送</p>
+                <details><summary>查看 AI 原始文案</summary><p>${escapeHtml(draft.originalMessage)}</p></details>
+            </article>`;
+        });
+        return `<section id="copy-results" class="section-spacer" aria-label="文案生成结果">
+            <h2>文案与配图</h2>
+            ${generationErrors.map((item) => `<p class="alert">${item.memberId}：${escapeHtml(item.error)}</p>`).join('')}
+            ${cards.slice(0, 5).join('') || '<p class="helper">生成结果会保存在这里，刷新后可继续编辑和复制。</p>'}
+            ${cards.length > 5 ? `<details><summary>更早的文案 · ${cards.length - 5} 条</summary>${cards.slice(5).join('')}</details>` : ''}
+        </section>`;
+    }
+
+    function generateFor(memberIds, model = selectedModel) {
+        if (!memberIds.length) return toast('请先勾选会员');
+        return save('/copy/generate', { memberIds, model }, ({ items, errors }) => {
+            generationErrors = errors;
+            items.forEach((item) => selectedMembers.delete(item.memberId));
+            render();
+            document.getElementById('copy-results').scrollIntoView({ block: 'start' });
+            toast(
+                `已生成 ${items.length} 套文案${errors.length ? `，${errors.length} 位未完成，可查看原因后重试` : ''}`,
+            );
+        });
+    }
+
+    function uploadProductImage() {
+        const file = document.getElementById('product-image-file').files[0];
+        const productId = document.getElementById('image-product').value;
+        if (!file || !['image/png', 'image/jpeg', 'image/webp'].includes(file.type))
+            return toast('请选择 PNG、JPEG 或 WebP 图片');
+        if (file.size > 5 * 1024 * 1024) return toast('图片不能超过 5 MB');
+        return save(`/products/${encodeURIComponent(productId)}/image`, file, () => {
+            render();
+            toast('产品图片已绑定，已有文案也可下载该图');
+        });
+    }
+
+    function saveCopy(id, copy = false) {
+        const message = document.getElementById('copy-message-' + id)?.value.trim();
+        if (!message) return toast('请填写文案');
+        return save(`/copy/${id}/save`, { message }, async () => {
+            copyEdits.delete(String(id));
+            if (copy) {
+                try {
+                    await navigator.clipboard.writeText(message);
+                } catch {
+                    const field = document.getElementById('copy-message-' + id);
+                    field.disabled = false;
+                    field.focus();
+                    field.select();
+                    const copied = document.execCommand('copy');
+                    field.disabled = true;
+                    if (!copied) throw new Error('浏览器未允许复制，请手动复制已选中的文案');
+                }
+                const response = await api(`/copy/${id}/copied`, { message });
+                applyState(response.state);
+            }
+            render();
+            toast(copy ? '文案已复制，可粘贴给客户' : '修改已保存');
+        });
+    }
+
     function campaigns() {
         let list = tasks.filter((t) => taskFilter === 'all' || t.status === taskFilter),
             ct = (s) => tasks.filter((t) => t.status === s).length;
@@ -369,9 +743,20 @@
         }<div class="notice">此为前端演示：任务与审核记录保存到演示数据库，所有触达均为模拟。</div></div>`;
     }
     function reports() {
-        const scopedTasks = reportGoal === 'all' ? tasks : tasks.filter((task) => (task.goal || 'general') === reportGoal);
-        const tabs = [['all', '全部目标'], ...Object.entries(GOALS).map(([key, goal]) => [key, goal.label]), ['general', '通用演示']]
-            .map(([key, label]) => `<button class="filterbtn ${reportGoal === key ? 'active' : ''}" aria-pressed="${reportGoal === key}" data-report-goal="${key}">${label}</button>`).join('');
+        const scopedTasks =
+            reportGoal === 'all'
+                ? tasks
+                : tasks.filter((task) => (task.goal || 'general') === reportGoal);
+        const tabs = [
+            ['all', '全部目标'],
+            ...Object.entries(GOALS).map(([key, goal]) => [key, goal.label]),
+            ['general', '通用演示'],
+        ]
+            .map(
+                ([key, label]) =>
+                    `<button class="filterbtn ${reportGoal === key ? 'active' : ''}" aria-pressed="${reportGoal === key}" data-report-goal="${key}">${label}</button>`,
+            )
+            .join('');
         const sent = scopedTasks.filter((t) => t.status === 'executed_simulated'),
             reply = sent.filter((t) => t.result.reply).length,
             booked = sent.filter((t) => t.result.booking).length,
@@ -388,7 +773,8 @@
                 ['创建任务', scopedTasks.length],
                 [
                     '审核通过',
-                    scopedTasks.filter((t) => ['approved', 'executed_simulated'].includes(t.status)).length,
+                    scopedTasks.filter((t) => ['approved', 'executed_simulated'].includes(t.status))
+                        .length,
                 ],
                 ['模拟触达', sent.length],
                 ['模拟回复', reply],
@@ -399,30 +785,35 @@
     }
     function render() {
         const pages = {
-            dashboard: ['01', '经营驾驶舱', '指尖的美好，值得再次相见。', dashboard],
-            members: ['02', '会员分析', '记得她的偏爱，也关心她的近况。', membersPage],
-            campaigns: ['03', '任务审核', '一份用心问候，由你细细确认。', campaigns],
-            reports: ['04', '经营复盘', '每一次重逢，都留下回响。', reports],
+            dashboard: ['经营驾驶舱', 'home', dashboard],
+            members: ['会员档案', 'users', membersPage],
+            care: ['护理跟进', 'heart', carePage],
+            studio: ['话术工作台', 'spark', studioPage],
+            campaigns: ['任务审核', 'tasks', campaigns],
+            reports: ['效果复盘', 'chart', reports],
         };
-        const [index, title, motto, pageRenderer] = pages[view];
-        document.getElementById('content').innerHTML = pageRenderer();
-        document.getElementById('page-title').textContent = title;
-        document.getElementById('page-motto').textContent = motto;
-        document.getElementById('page-index').textContent = index + ' / 工作空间';
-        document.getElementById('edition-name').textContent = title;
-        document.querySelectorAll('[data-member-count]').forEach((element) => { element.textContent = num(members.length); });
-        document.querySelectorAll('#sidebar [data-view]').forEach((button) => {
-            if (button.dataset.view === view) button.setAttribute('aria-current', 'page');
-            else button.removeAttribute('aria-current');
-        });
+        document.getElementById('content').innerHTML = pages[view][2]();
+        document.getElementById('page-title').textContent = pages[view][0];
         const pending = tasks.filter((task) => task.status === 'pending_review').length;
-        document.getElementById('pending-badge').textContent = pending || '';
-        document.getElementById('data-origin').textContent = dataSource.kind === 'sqlite_import'
-            ? `来源数据已导入 · ${products.length} 项演示产品`
-            : '固定生成的演示资料';
-        document.getElementById('logs').innerHTML = logs.length ? logs.map((entry) =>
-            `<li>[${escapeHtml(entry.time)}] ${escapeHtml(entry.desc)}</li>`
-        ).join('') : '<li>暂无操作记录。</li>';
+        document.querySelector('#sidebar .nav').innerHTML = Object.entries(pages)
+            .map(
+                ([key, [label, ico]]) =>
+                    `<button data-view="${key}" class="${view === key ? 'active' : ''}" ${view === key ? 'aria-current="page"' : ''}>${icon(ico)}<span class="nav-label">${label}</span>${key === 'campaigns' && pending ? `<span class="nav-count">${pending}</span>` : ''}</button>`,
+            )
+            .join('');
+        document.querySelectorAll('[data-member-count]').forEach((element) => {
+            element.textContent = num(members.length);
+        });
+        document.getElementById('data-origin').textContent =
+            dataSource.kind === 'sqlite_import'
+                ? `来源数据已导入 · ${products.length} 项产品`
+                : '固定生成的演示资料';
+        document.getElementById('logs').innerHTML = logs.length
+            ? logs
+                  .map((entry) => `<li>[${escapeHtml(entry.time)}] ${escapeHtml(entry.desc)}</li>`)
+                  .join('')
+            : '<li>暂无操作记录。</li>';
+        if (view === 'members') loadMemberExtra(profileMemberId);
     }
 
     function modal(html) {
@@ -448,21 +839,46 @@
             if (container?.dataset.id === id) container.innerHTML = sourceHistory(details);
         } catch (error) {
             const container = document.getElementById('member-source-details');
-            if (container?.dataset.id === id) container.textContent = '历史资料加载失败：' + error.message;
+            if (container?.dataset.id === id)
+                container.textContent = '历史资料加载失败：' + error.message;
         }
     }
 
     function sourceHistory(details) {
         const sections = [
-            ['最近消费记录', details.orders.map((row) => [row.order_date, row.style, money(row.amount), row.technician])],
+            [
+                '最近消费记录',
+                details.orders.map((row) => [
+                    row.order_date,
+                    row.style,
+                    money(row.amount),
+                    row.technician,
+                ]),
+            ],
             ['会员备注', details.notes.map((row) => [row.created_at, row.note_text, row.author_name])],
-            ['历史联系', details.contacts.map((row) => [row.contact_date, row.channel, row.outcome, row.staff_name])],
-            ['预约记录', details.appointments.map((row) => [row.appointment_date, row.status, row.technician])],
+            [
+                '历史联系',
+                details.contacts.map((row) => [
+                    row.contact_date,
+                    row.channel,
+                    row.outcome,
+                    row.staff_name,
+                ]),
+            ],
+            [
+                '预约记录',
+                details.appointments.map((row) => [row.appointment_date, row.status, row.technician]),
+            ],
         ];
-        let html = sections.map(([title, rows]) => `<details><summary>${title} · 最近 ${rows.length} 条</summary>
-            ${rows.length ? `<ul class="source-history">${rows.map((cells) => `<li>${cells.map(escapeHtml).join(' · ')}</li>`).join('')}</ul>` : '<p class="helper">暂无来源记录。</p>'}</details>`).join('');
+        let html = sections
+            .map(
+                ([title, rows]) => `<details><summary>${title} · 最近 ${rows.length} 条</summary>
+            ${rows.length ? `<ul class="source-history">${rows.map((cells) => `<li>${cells.map(escapeHtml).join(' · ')}</li>`).join('')}</ul>` : '<p class="helper">暂无来源记录。</p>'}</details>`,
+            )
+            .join('');
         const profile = details.careProfile;
-        if (profile) html += `<details><summary>护理档案</summary>
+        if (profile)
+            html += `<details><summary>护理档案</summary>
             <p>最近服务：${escapeHtml(profile.last_service_type)}</p>
             <p>需求标签：${escapeHtml(profile.care_need_tags)}</p>
             <p>建议服务：${escapeHtml(profile.preferred_care_service)}</p>
@@ -496,7 +912,8 @@
 
     function queueGoalTasks() {
         const memberIds = Array.from(
-            document.querySelectorAll('#goal-panel input[name="candidate"]:checked'), (input) => input.value,
+            document.querySelectorAll('#goal-panel input[name="candidate"]:checked'),
+            (input) => input.value,
         );
         if (!memberIds.length) return toast('请先勾选要加入待审核的会员');
         return save('/tasks', { goal: selectedGoal, memberIds }, ({ created }) => {
@@ -528,9 +945,12 @@
         const task = tasks.find((task) => task.id === id);
         if (task?.status !== 'approved') return toast('只有已审核通过且未执行的任务可以执行');
 
-        const options = Object.entries(SCENARIOS).map(([key, scenario]) =>
-            `<label class="scenario-option"><input type="radio" name="scenario" value="${key}"> ${scenario.label}</label>`
-        ).join('');
+        const options = Object.entries(SCENARIOS)
+            .map(
+                ([key, scenario]) =>
+                    `<label class="scenario-option"><input type="radio" name="scenario" value="${key}"> ${scenario.label}</label>`,
+            )
+            .join('');
         modal(`${headModal('SIMULATION', `${task.memberId} · 选择模拟结果`)}
             <fieldset class="quote"><legend>本次触达的模拟情景</legend>${options}</fieldset>
             <p class="notice">模拟到店消费按 ${money(DEMO_SERVICE_PRICE)} 演示。此操作仅更新演示数据。</p>
@@ -574,7 +994,7 @@
         );
     }
     function reset() {
-        if (!window.confirm('重置会清空共享演示任务、关怀记录和操作日志。确定继续吗？')) return;
+        if (!window.confirm('重置会清空演示任务、关怀记录、AI 文案和操作日志。确定继续吗？')) return;
         return save('/reset', {}, () => {
             filter = 'all';
             search = '';
@@ -583,7 +1003,13 @@
             selectedGoal = 'wake';
             reportGoal = 'all';
             careMemberId = null;
+            careFilter = 'pending';
+            careSearch = '';
+            careLimit = 15;
             careDrafts.clear();
+            copyEdits.clear();
+            selectedMembers.clear();
+            generationErrors = [];
             closeModal();
             render();
             toast('已重置为初始演示场景');
@@ -632,11 +1058,62 @@
         if (targetReportGoal) {
             reportGoal = targetReportGoal;
             render();
-            document.querySelector(`[data-report-goal="${targetReportGoal}"]`).focus({ preventScroll: true });
+            document
+                .querySelector(`[data-report-goal="${targetReportGoal}"]`)
+                .focus({ preventScroll: true });
             return;
         }
 
         switch (action) {
+            case 'focus-member':
+                profileMemberId = id;
+                return render();
+            case 'retry-member':
+                return loadMemberExtra(id);
+            case 'care-filter':
+                careFilter = id;
+                careLimit = 15;
+                return render();
+            case 'more-care':
+                careLimit += 15;
+                return render();
+            case 'care-history':
+                document.getElementById('care-history').open = true;
+                return document.getElementById('care-history').scrollIntoView({ block: 'start' });
+            case 'studio-member':
+                if (!members.some((member) => member.id === id && canContact(member)))
+                    return toast('会员未通过联系资格检查');
+                if (!selectedMembers.has(id) && selectedMembers.size >= 5)
+                    return toast('每批最多 5 位会员，请先调整名单');
+                selectedMembers.add(id);
+                return setView('studio');
+            case 'catalog':
+                return catalogModal();
+            case 'bind-product-image':
+                closeModal();
+                setView('studio');
+                document.querySelector('.ai-tools details').open = true;
+                document.getElementById('image-product').value = id;
+                return document.getElementById('product-image-file').scrollIntoView({ block: 'center' });
+            case 'generate-copy':
+                return generateFor([...selectedMembers]);
+            case 'clear-selected':
+                selectedMembers.clear();
+                return render();
+            case 'remove-selected':
+                selectedMembers.delete(id);
+                return render();
+            case 'upload-product-image':
+                return uploadProductImage();
+            case 'save-copy':
+                return saveCopy(id);
+            case 'copy-message':
+                return saveCopy(id, true);
+            case 'regenerate-copy': {
+                const draft = copyDrafts.find((draft) => String(draft.id) === id);
+                if (draft) return generateFor([draft.memberId], draft.model);
+                return;
+            }
             case 'menu': {
                 const open = document.body.classList.toggle('menu-open');
                 control.setAttribute('aria-expanded', String(open));
@@ -687,6 +1164,21 @@
     });
 
     document.addEventListener('change', (event) => {
+        const input = event.target;
+        if (input.dataset.selectMember) {
+            if (input.checked && selectedMembers.size >= 5) {
+                input.checked = false;
+                return toast('每批最多选择 5 位会员');
+            }
+            if (input.checked) selectedMembers.add(input.dataset.selectMember);
+            else selectedMembers.delete(input.dataset.selectMember);
+            render();
+            return;
+        }
+        if (input.id === 'ai-model') selectedModel = input.value;
+    });
+
+    document.addEventListener('change', (event) => {
         const form = event.target.closest('#care-form');
         if (!form) return;
         if (event.target.id === 'care-follow') {
@@ -697,17 +1189,22 @@
 
     document.addEventListener('input', (event) => {
         const input = event.target;
+        if (input.dataset.copyEdit) {
+            copyEdits.set(input.dataset.copyEdit, input.value);
+            const preview = document.querySelector(`[data-chat-preview="${input.dataset.copyEdit}"]`);
+            if (preview) preview.textContent = input.value;
+        }
         const careForm = input.closest('#care-form');
         if (careForm) rememberCareDraft(careForm);
-        if (input.id !== 'member-search') return;
-
-        search = input.value;
+        if (!['member-search', 'care-search'].includes(input.id)) return;
+        if (input.id === 'member-search') search = input.value;
+        else careSearch = input.value;
         page = 1;
         const { selectionStart, selectionEnd } = input;
         render();
 
         // 重绘会替换搜索框，需要恢复焦点和光标位置。
-        const searchInput = document.getElementById('member-search');
+        const searchInput = document.getElementById(input.id);
         searchInput.focus();
         searchInput.setSelectionRange(selectionStart, selectionEnd);
     });
@@ -715,14 +1212,17 @@
         if (ev.key === 'Escape') {
             closeModal();
             document.body.classList.remove('menu-open');
-            document.getElementById('menu-toggle').setAttribute('aria-expanded', 'false');
+            document.getElementById('menu-toggle')?.setAttribute('aria-expanded', 'false');
         }
     });
-    api('/state').then((state) => {
-        applyState(state);
-        render();
-    }).catch((error) => {
-        document.getElementById('content').innerHTML = `<p class="alert">加载演示数据失败：${escapeHtml(error.message)}</p><button class="btn" id="retry-load">重试</button>`;
-        document.getElementById('retry-load').addEventListener('click', () => location.reload());
-    });
+    api('/state')
+        .then((state) => {
+            applyState(state);
+            render();
+        })
+        .catch((error) => {
+            document.getElementById('content').innerHTML =
+                `<p class="alert">加载演示数据失败：${escapeHtml(error.message)}</p><button class="btn" id="retry-load">重试</button>`;
+            document.getElementById('retry-load').addEventListener('click', () => location.reload());
+        });
 })();

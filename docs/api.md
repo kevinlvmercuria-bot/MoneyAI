@@ -61,4 +61,22 @@
 
 导入后的 `dataSource` 包含 `kind: "sqlite_import"`、`sourceHash`、`importedAt` 和各来源表的行数 `counts`。尚未导入时为 `{ "kind": "generated_demo" }`。会员增加 `displayName`、`latestNote`、`preferredTechnician`、`cycleConfidence`、`source` 等来源信息。
 
+增强版界面使用会员快照中的 `careProfile` 摘要，包含 `memberId`、`tags`、`lastService`、`preferredService`、`followupDate` 和 `status`；没有来源护理档案时为 `null`。护理页据此排除 `not_due` 和无明确需求的来源记录，已有店主关怀记录仍可查看。会员历史接口中的 `careProfile` 继续返回原始档案字段。
+
 会员历史接口返回来源 SQLite 中的原始字段，日期为来源字符串。`orders` 按 `order_date`、`notes` 按 `created_at`、`contacts` 按 `contact_date`、`appointments` 按 `appointment_date` 倒序，各最多 10 条。护理档案不存在时 `careProfile` 为 `null`。接口读取 SQL Server 中保存的快照；会员不存在返回 404，编号格式无效返回 400。
+
+## AI 文案与产品图
+
+状态快照增加 `ai` 和 `copyDrafts`。`ai` 包含 `configured`、可选模型列表 `models`（`id`、`label`）和 `defaultModel`。密钥不随接口返回。`copyDrafts` 是最近 50 条，字段为数字 `id`、`memberId`、`model`、`message`、`originalMessage`、`reason`、`productIds`、`createdAt`、`copiedAt`。未复制时 `copiedAt` 为 null。产品增加 `imageUrl`，未上传时为 null。
+
+| 方法与路径 | 请求 | 响应 |
+| --- | --- | --- |
+| POST `/api/copy/generate` | `{"memberIds":["M0001"],"model":"Qwen/Qwen3.6-Flash"}` | `{ "items":[{"id":1,"memberId":"M0001"}], "errors":[], "state":{...} }` |
+| POST `/api/copy/:id/save` | `{"message":"店主核对后的邀约"}` | `{"state":{...}}` |
+| POST `/api/copy/:id/copied` | `{"message":"实际复制的文案"}`，客户端成功写入剪贴板后调用 | `{"state":{...}}` |
+| POST `/api/products/:id/image` | 图片二进制，Content-Type 为 image/png、image/jpeg 或 image/webp | `{"state":{...}}` |
+| GET `/api/product-images/:id` | 无 | 图片二进制；`?download=1` 使用附件下载 |
+
+每批 1 至 5 个不同会员，保存文案为 1 至 1000 字符。模型只能选择目录内可用产品，最多 2 个。无效模型或名单格式返回 400；会员联系资格失效、重复生成中的批次或不可用产品返回 409。模型服务失败按会员写入 `errors`（含 `memberId` 和可读 `error`），成功项独立保存。批次级错误不会写入文案。图片最多 5 MB，超限返回 413；格式不符返回 400。
+
+模型调用在数据库事务外执行，保存前再次核对会员资格和产品资料。图片以新记录保存，每个产品使用最新绑定图；旧图片 URL 继续有效。更换产品图片不改写生成文案。保存修改会清除该文案的旧复制标记，复制时间独立保存，复制不会改变任务、预约或消费数据。重置演示清除 `CopyDrafts`，保留产品图片；生成进行中重置返回 409。

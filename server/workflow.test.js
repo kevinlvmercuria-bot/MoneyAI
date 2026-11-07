@@ -7,6 +7,7 @@ const { connect, transaction } = require('./db');
 const { createApp } = require('./main');
 const { initialize } = require('../database/setup');
 const { importSource, readSource, mapMembers } = require('../database/import-source');
+const aiCopy = require('./ai-copy');
 const store = require('./store');
 const { goalCandidates, SCENARIOS, DEMO_SERVICE_PRICE, CARE_OUTCOMES, canContact, productFor } = require('../public/rules');
 
@@ -22,7 +23,18 @@ test('SQL Server 最小业务闭环验收', { timeout: 90000 }, async (t) => {
         created = true;
         pool = await connect(database);
         await initialize(pool);
-        server = createApp(pool).listen(0, '127.0.0.1');
+        let generatorMode = 'valid';
+        let failedMember = '';
+        const generate = async ({member, products}) => {
+            if (generatorMode === 'partial' && member.id === failedMember) throw new Error('模拟上游失败');
+            const product = aiCopy.availableProducts(products).find((product) => product.style === member.style);
+            return {
+                message: `你好，有一款「${product.name}」想邀请你看看，需要帮你了解款式吗？`,
+                reason: `结合${member.style}偏好进行推荐`,
+                productIds: generatorMode === 'invalid' ? ['UNKNOWN_PRODUCT'] : [product.id],
+            };
+        };
+        server = createApp(pool, {generateCopy: generate}).listen(0, '127.0.0.1');
         await new Promise((resolve, reject) => {
             server.once('listening', resolve);
             server.once('error', reject);
@@ -256,6 +268,86 @@ test('SQL Server 最小业务闭环验收', { timeout: 90000 }, async (t) => {
             const task = (await response.json()).state.tasks.at(-1);
             assert.ok(task.message.includes(product.name));
             assert.ok(task.reason.includes(product.name));
+        });
+
+        let copyMembers, draftId, imageUrl;
+        const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jF1cAAAAASUVORK5CYII=', 'base64');
+        await t.test('AI 名单与模型校验，密钥不出现在状态响应', async () => {
+            const current = await state();
+            copyMembers = current.members.filter((member) => canContact(member) && !member.careHandled).slice(0,2);
+            const model = current.ai.defaultModel;
+            assert.ok(copyMembers.length === 2);
+            if (process.env.AI_API_KEY) assert.equal(JSON.stringify(current).includes(process.env.AI_API_KEY), false);
+            assert.equal((await post('/copy/generate',{memberIds:[],model})).status,400);
+            assert.equal((await post('/copy/generate',{memberIds:[copyMembers[0].id],model:'unknown'})).status,400);
+            const blocked = current.members.find((member) => !canContact(member));
+            assert.equal((await post('/copy/generate',{memberIds:[blocked.id],model})).status,409);
+        });
+
+        await t.test('批量生成独立文案并持久保存，非法产品不落库', async () => {
+            const current = await state();
+            const body = {memberIds:copyMembers.map((member)=>member.id),model:current.ai.defaultModel};
+            const response = await post('/copy/generate',body);
+            assert.equal(response.status,200);
+            const result = await response.json();
+            assert.equal(result.items.length,2);
+            assert.deepEqual(result.errors,[]);
+            draftId = result.items[0].id;
+            const saved = (await state()).copyDrafts;
+            assert.equal(saved.length,2);
+            assert.ok(saved.every((draft)=>draft.productIds.length===1));
+            generatorMode = 'invalid';
+            const invalid = await (await post('/copy/generate',body)).json();
+            assert.equal(invalid.items.length,0);
+            assert.equal(invalid.errors.length,2);
+            assert.equal((await state()).copyDrafts.length,2);
+            assert.throws(()=>aiCopy.parseResult('null',current.products),{apiStatus:502});
+            generatorMode = 'partial';
+            failedMember = copyMembers[0].id;
+            const partial = await (await post('/copy/generate',body)).json();
+            assert.equal(partial.items.length,1);
+            assert.equal(partial.errors.length,1);
+            generatorMode = 'valid';
+        });
+
+        await t.test('产品图片绑定、下载与替换，拒绝伪装及超限图片', async () => {
+            const draft = (await state()).copyDrafts.find((draft)=>draft.id===draftId);
+            const productId = draft.productIds[0];
+            const upload = (id,data=png) => fetch(base+'/api/products/'+id+'/image',{
+                method:'POST',headers:{'Content-Type':'image/png'},body:data,
+            });
+            assert.equal((await upload(productId,Buffer.from('this is not a png image'))).status,400);
+            assert.equal((await upload('unknown')).status,404);
+            assert.equal((await upload(productId,Buffer.alloc(5*1024*1024+1))).status,413);
+            assert.equal((await upload(productId)).status,200);
+            imageUrl = (await state()).products.find((product)=>product.id===productId).imageUrl;
+            const image = await fetch(base+imageUrl+'?download=1');
+            assert.equal(image.status,200);
+            assert.match(image.headers.get('content-disposition'),/attachment/);
+            assert.deepEqual(Buffer.from(await image.arrayBuffer()),png);
+            assert.equal((await upload(productId)).status,200);
+            assert.notEqual((await state()).products.find((product)=>product.id===productId).imageUrl,imageUrl);
+            assert.equal((await fetch(base+imageUrl)).status,200);
+        });
+
+        await t.test('修改与复制单独记录，不改变任务结果和联系冷却', async () => {
+            const before = await state();
+            assert.equal((await post('/copy/'+draftId+'/save',{message:' '})).status,400);
+            assert.equal((await post('/copy/'+draftId+'/save',{message:'店主修改 <邀请看图>'})).status,200);
+            assert.equal((await post('/copy/'+draftId+'/copied',{message:'过期文案'})).status,409);
+            assert.equal((await post('/copy/'+draftId+'/copied',{message:'店主修改 <邀请看图>'})).status,200);
+            const after = await state();
+            const draft = after.copyDrafts.find((draft)=>draft.id===draftId);
+            assert.equal(draft.message,'店主修改 <邀请看图>');
+            assert.notEqual(draft.originalMessage,draft.message);
+            assert.ok(draft.copiedAt);
+            assert.deepEqual(after.tasks,before.tasks);
+            assert.deepEqual(after.members,before.members);
+            await post('/care-records',{memberId:copyMembers[0].id,outcome:'不再营销',note:'本人拒绝',owner:'店长'});
+            assert.equal((await post('/copy/'+draftId+'/copied',{message:'店主修改 <邀请看图>'})).status,409);
+            assert.equal((await post('/reset',{})).status,200);
+            assert.deepEqual((await state()).copyDrafts,[]);
+            assert.equal((await fetch(base+imageUrl)).status,200);
         });
     } finally {
         if (server) {

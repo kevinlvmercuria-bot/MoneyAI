@@ -11,7 +11,7 @@
     "dev": "node --watch server/main.js",
     "db:init": "node database/setup.js",
     "test": "node --test server/workflow.test.js",
-    "check": "node --check server/main.js && node --check server/store.js && node --check database/setup.js && node --check public/workspace.js",
+    "check": "node --check server/main.js && node --check server/store.js && node --check server/ai-copy.js && node --check server/copy-routes.js && node --check database/setup.js && node --check public/workspace.js",
     "test:legacy": "node --test server/app.test.js",
     "db:import": "node database/import-source.js"
   },

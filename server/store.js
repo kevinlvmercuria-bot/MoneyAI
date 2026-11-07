@@ -33,21 +33,36 @@ async function state(tx) {
         FROM dbo.CareRecords ORDER BY id DESC;
         SELECT profile FROM dbo.Products ORDER BY id;
         SELECT TOP (1) source_hash AS sourceHash, counts_json AS counts, imported_at AS importedAt FROM dbo.ImportRuns ORDER BY imported_at DESC;
+        SELECT TOP (50) id, member_id AS memberId, model, message, original_message AS originalMessage,
+            reason, product_ids AS productIds, created_at AS createdAt, copied_at AS copiedAt FROM dbo.CopyDrafts ORDER BY id DESC;
+        SELECT product_id AS productId, MAX(id) AS imageId FROM dbo.ProductImages GROUP BY product_id;
+        SELECT member_id AS memberId, JSON_VALUE(payload, '$.care_need_tags') AS tags,
+            JSON_VALUE(payload, '$.last_service_type') AS lastService,
+            JSON_VALUE(payload, '$.preferred_care_service') AS preferredService,
+            JSON_VALUE(payload, '$.recommended_followup_date') AS followupDate,
+            JSON_VALUE(payload, '$.care_followup_status') AS status
+        FROM dbo.SourceRecords WHERE source_table = 'member_care_profiles';
     `);
     const careRecords = recordsets[3];
     const careByMember = new Map(careRecords.map((record) => [record.memberId, record]));
+    const images = new Map(recordsets[7].map((image) => [image.productId, image.imageId]));
+    const careProfiles = new Map(recordsets[8].map((profile) => [profile.memberId, profile]));
     return {
         members: recordsets[0].map((row) => {
             const member = JSON.parse(row.profile);
             const record = careByMember.get(member.id);
             member.careHandled = Boolean(record);
+            member.careProfile = careProfiles.get(member.id) || null;
             member.carePaused = record?.outcome === '暂不联系';
             if (record?.outcome === '不再营销') member.consent = false;
             if (record && ['已沟通', '未回复'].includes(record.outcome)) member.contactDays = 0;
             return member;
         }),
         careRecords,
-        products: recordsets[4].length ? recordsets[4].map((row) => JSON.parse(row.profile)) : PRODUCTS,
+        products: (recordsets[4].length ? recordsets[4].map((row) => JSON.parse(row.profile)) : PRODUCTS)
+            .map((product) => ({ ...product, imageUrl: images.has(product.id) ? '/api/product-images/' + images.get(product.id) : null })),
+        copyDrafts: recordsets[6].map((row) => ({ ...row, productIds: JSON.parse(row.productIds) })),
+        ai: require('./ai-copy').metadata(),
         dataSource: recordsets[5].length ? { ...recordsets[5][0], counts: JSON.parse(recordsets[5][0].counts), kind: 'sqlite_import' } : { kind: 'generated_demo' },
         tasks: recordsets[1].map(toTask),
         logs: recordsets[2].map((row) => ({
