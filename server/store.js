@@ -27,9 +27,24 @@ async function state(tx) {
         SELECT profile FROM dbo.Members ORDER BY id;
         SELECT * FROM dbo.Tasks ORDER BY id;
         SELECT TOP (40) name, description AS [desc], created_at FROM dbo.OperationLogs ORDER BY id DESC;
+        SELECT id, member_id AS memberId, outcome, note, owner,
+            CONVERT(char(10), follow_up, 23) AS followUp,
+            CONVERT(char(10), recorded_as_of, 23) AS recordedAsOf
+        FROM dbo.CareRecords ORDER BY id DESC;
     `);
+    const careRecords = recordsets[3];
+    const careByMember = new Map(careRecords.map((record) => [record.memberId, record]));
     return {
-        members: recordsets[0].map((row) => JSON.parse(row.profile)),
+        members: recordsets[0].map((row) => {
+            const member = JSON.parse(row.profile);
+            const record = careByMember.get(member.id);
+            member.careHandled = Boolean(record);
+            member.carePaused = record?.outcome === '暂不联系';
+            if (record?.outcome === '不再营销') member.consent = false;
+            if (record && ['已沟通', '未回复'].includes(record.outcome)) member.contactDays = 0;
+            return member;
+        }),
+        careRecords,
         tasks: recordsets[1].map(toTask),
         logs: recordsets[2].map((row) => ({
             name: row.name, desc: row.desc,
@@ -70,4 +85,16 @@ async function seedTask(tx, demoMember) {
     await insertTask(tx, buildReviewTask(demoMember, null));
 }
 
-module.exports = { state, insertTask, updateTask, log, seedTask };
+async function insertCareRecord(tx, record) {
+    await tx.request()
+        .input('memberId', sql.VarChar(5), record.memberId)
+        .input('outcome', sql.NVarChar(20), record.outcome)
+        .input('note', sql.NVarChar(1000), record.note)
+        .input('owner', sql.NVarChar(80), record.owner)
+        .input('followUp', sql.VarChar(10), record.followUp)
+        .input('recordedAsOf', sql.VarChar(10), record.recordedAsOf)
+        .query(`INSERT dbo.CareRecords (member_id, outcome, note, owner, follow_up, recorded_as_of)
+            VALUES (@memberId, @outcome, @note, @owner, @followUp, @recordedAsOf)`);
+}
+
+module.exports = { state, insertTask, updateTask, log, seedTask, insertCareRecord };

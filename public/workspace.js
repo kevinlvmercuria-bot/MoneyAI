@@ -1,6 +1,6 @@
 (() => {
     'use strict';
-    const { GOALS, SCENARIOS, DEMO_SERVICE_PRICE, money, canContact, priorityScore, productFor, goalReason, goalCandidates } = NailMateRules;
+    const { GOALS, SCENARIOS, DEMO_SERVICE_PRICE, money, canContact, priorityScore, productFor, goalReason, goalCandidates, buildReviewTask, DEMO_DATE, CARE_OUTCOMES } = NailMateRules;
     const LIFECYCLE_LABELS = { active: '活跃', due: '待复购', low_frequency: '低频', dormant: '沉睡' },
         TASK_STATUS_LABELS = {
             pending_review: '待审核',
@@ -22,6 +22,9 @@
     let members = [];
     let tasks = [];
     let logs = [];
+    let careRecords = [];
+    let careMemberId = null;
+    const careDrafts = new Map();
     let saving = false;
 
     async function api(path, body) {
@@ -37,7 +40,7 @@
     }
 
     function applyState(state) {
-        ({ members, tasks, logs } = state);
+        ({ members, tasks, logs, careRecords = [] } = state);
     }
 
     async function save(path, body, onSuccess) {
@@ -115,31 +118,16 @@
     }
     function setView(v) {
         view = v;
+        document.body.classList.remove('menu-open');
+        document.getElementById('menu-toggle').setAttribute('aria-expanded', 'false');
         page = 1;
         render();
         window.scrollTo(0, 0);
     }
-    function sidebar() {
-        return `<aside class="sidebar"><div class="brand"><div class="brandmark">N</div><div class="brandname">NailMate<small>AI STUDIO</small></div></div><div class="sidecaption">WORKSPACE / 工作空间</div><nav class="nav" aria-label="主导航">${[
-            ['dashboard', 'home', '经营驾驶舱'],
-            ['members', 'users', '会员智能分析'],
-            ['campaigns', 'tasks', '营销审核中心'],
-            ['reports', 'chart', '经营效果复盘'],
-        ]
-            .map(
-                ([id, ico, t]) =>
-                    `<button class="navbtn ${view === id ? 'active' : ''}" data-view="${id}">${icon(ico)}${t}${id === 'campaigns' && tasks.some((x) => x.status === 'pending_review') ? `<span class="count">${tasks.filter((x) => x.status === 'pending_review').length}</span>` : ''}</button>`,
-            )
-            .join(
-                '',
-            )}</nav><div class="sidebottom"><div class="support"><strong>✦ 温柔唤醒计划</strong><br/>让每一次关怀，都有恰好的时机。<br/><span style="color:#ab979f;font-size:10px">本版本仅用于虚拟数据演示</span></div><div class="sidefoot"><span class="avatar">店</span><span>店主体验模式<br/><small>DEMO WORKSPACE</small></span></div></div></aside>`;
-    }
-    function topbar() {
-        return `<div class="topbar"><div class="breadcrumb">NailMate AI / <b>${{ dashboard: '经营驾驶舱', members: '会员智能分析', campaigns: '营销审核中心', reports: '经营效果复盘' }[view]}</b></div><div class="topright"><span class="demo-pill">● SIMULATION</span><span class="timepill">演示基准日 2026.11.07</span><button class="circlebtn" title="查看模拟操作记录" data-view="reports">${icon('bell')}</button><span class="avatar">店</span></div></div>`;
-    }
     function head(title, kicker, sub, right = '') {
-        return `<div class="pagehead"><div><p class="kicker">${kicker}</p><h1>${title}</h1><p class="sub">${sub}</p></div>${right}</div>`;
+        return right ? `<div class="workspace-actions">${right}</div>` : '';
     }
+
     function metrics() {
         const counts = Object.fromEntries(
             ['active', 'due', 'low_frequency', 'dormant'].map((s) => [
@@ -163,57 +151,161 @@
     function goalPanel() {
         const candidates = goalCandidates(members, tasks, selectedGoal);
         const tabs = Object.entries(GOALS).map(([key, goal]) =>
-            `<button type="button" class="filterbtn ${selectedGoal === key ? 'active' : ''}" aria-pressed="${selectedGoal === key}" data-goal="${key}">${goal.label}</button>`
+            `<button class="filterbtn ${selectedGoal === key ? 'active' : ''}" aria-pressed="${selectedGoal === key}" data-goal="${key}">${goal.label}</button>`
         ).join('');
-        const cards = candidates.map((member) => `
-            <div class="candidate-card">
-                <label><input type="checkbox" name="candidate" value="${member.id}" checked> ${member.id}</label>
-                <p>${goalReason(member, selectedGoal)}</p>
-                <button type="button" class="filterbtn" data-member="${member.id}">查看会员详情</button>
-            </div>`
-        ).join('');
-        return `<section class="panel goal-panel" id="goal-panel" aria-labelledby="goal-heading">
-            <div class="panel-head"><h3 id="goal-heading">今日复购计划</h3><span>规则筛选 · 虚拟会员</span></div>
+        const cards = candidates.map((member, index) => {
+            const draft = buildReviewTask(member, null, selectedGoal);
+            return `<article class="hanger" data-candidate="${member.id}" style="--drop:${index % 2 ? 22 : 8}px">
+                <div class="cord" aria-hidden="true"></div><div class="tilt"><div class="card">
+                    <div class="face front" aria-hidden="false">
+                        <div class="meta">${member.id} / ${LIFECYCLE_LABELS[member.lifecycle]}</div>
+                        <div class="monogram" aria-hidden="true">${member.id.slice(-2)}</div>
+                        <h3>${member.style} · ${member.level}</h3>
+                        <div class="days"><b>${member.days}</b><span>天未到店</span></div>
+                        <p class="cycle">个人周期 ${member.cycle} 天 · 偏离 ${member.ratio} 倍</p>
+                        <p class="reason" title="${escapeHtml(draft.reason)}">${escapeHtml(draft.reason)}</p>
+                        <div class="actions">
+                            <button data-action="flip" data-id="${member.id}" aria-label="查看 ${member.id} 摘要">摘要 ↻</button>
+                            <label class="card-check"><input type="checkbox" name="candidate" value="${member.id}" checked>加入名单</label>
+                        </div>
+                    </div>
+                    <div class="face back" inert aria-hidden="true">
+                        <div class="meta">${member.id} / 沟通准备</div>
+                        <h3>${GOALS[selectedGoal].label}</h3>
+                        <h4>规则生成的邀约</h4><p>${escapeHtml(draft.message)}</p>
+                        <p class="quiet">入队后由店主修改并审核。</p>
+                        <div class="actions">
+                            <button data-action="prepare-care" data-id="${member.id}">沟通准备 ↓</button>
+                            <button data-action="flip" data-id="${member.id}" aria-label="返回 ${member.id} 正面">返回 ↶</button>
+                        </div>
+                    </div>
+                </div></div>
+            </article>`;
+        }).join('');
+        return `<section class="goal-panel" id="goal-panel" aria-labelledby="goal-heading">
+            <div class="section-head"><div><p class="eyebrow">PERSONAL TOUCH / 今日计划</p><h2 id="goal-heading">给每次联系，一个合适的理由。</h2></div></div>
             <div class="goal-tabs" aria-label="经营目标">${tabs}</div>
-            <p class="sub">${candidates.length ? `推荐 ${candidates.length} 人，每次最多加入 5 人。` : '当前没有可入队的会员。会员需命中目标、通过联系资格检查且没有有效任务。'}</p>
-            <div class="candidate-list">${cards}</div>
-            <div class="modal-actions"><button class="btn" data-action="queue-goal" ${candidates.length ? '' : 'disabled'}>加入待审核</button></div>
+            <p class="care-note">${candidates.length ? `推荐 ${candidates.length} 人，每次最多加入 5 人。翻到背面查看沟通摘要，勾选后加入待审核。` : '当前没有可入队的会员。会员需命中目标、通过联系资格检查且没有有效任务。'}</p>
+            <div id="care-wall" aria-label="推荐会员关怀卡">${cards}</div>
+            <div class="workspace-actions"><button class="btn" data-action="queue-goal" ${candidates.length ? '' : 'disabled'}>加入待审核</button></div>
         </section>`;
     }
 
-    function dashboard() {
-        let a = metrics(),
-            total = members.length;
-        const lifeColors = {
-            active: '#a5c6b0',
-            due: '#e9bf86',
-            low_frequency: '#cf9bb2',
-            dormant: '#986680',
-        };
-        return `${head('早上好，店主 ✳', 'GOOD MORNING · YOUR BUSINESS COPILOT', '你的会员经营概况已准备好。今天，让每一次联系都更有温度。', `<button class="btn outline" data-action="reset">${icon('clock')} 重置演示</button>`)}<section class="hero"><div class="herocontent"><span class="eyebrow">NAILMATE AI · PERSONALIZED CARE</span><h2>把每一次回访，<br/>变成恰到好处的关怀。</h2><p>从 2,800 位虚拟会员中发现机会，生成个性化经营建议。</p><button class="btn" data-action="analyze">${icon('spark')} 运行模拟经营分析 <span style="margin-left:6px">→</span></button></div><div class="heroart"><div class="bigcircle"></div><div class="circleline"></div><div class="nailcard"><div class="nail"></div><div class="nail"></div><div class="nail"></div></div><div class="flower">✿</div></div></section>${goalPanel()}<div class="metrics">${metric('会员总数', total, '可复现的虚拟会员档案', 'users')}${metric('可联系沉睡会员', a.eligibleDormant, '已过滤营销授权等限制', 'clock')}${metric('持有储值余额', a.balanced, '权益提醒不等于新增收入', 'heart')}${metric('待审核任务', a.pending, '必须由人工批准后才能模拟执行', 'tasks')}</div><div class="dashboard-grid"><section class="panel"><div class="panel-head"><h3>会员生命周期分布</h3><button class="textlink" data-view="members">查看全部会员 →</button></div>${Object.entries(
-            a.counts,
-        )
-            .map(
-                ([s, n]) =>
-                    `<div class="life-row"><label>${LIFECYCLE_LABELS[s]}</label><div class="track"><div class="fill" style="width:${Math.max(1, (n / total) * 100)}%;background:${lifeColors[s]}"></div></div><strong>${num(n)}</strong></div>`,
-            )
-            .join(
-                '',
-            )}<div class="legend">依据个人历史复购周期的偏离程度进行启发式分类 · 演示数据</div></section><section class="panel"><div class="panel-head"><h3>今日经营建议</h3><span>规则演示 · 非真实模型调用</span></div><div class="recommend"><div class="r-ico">${icon('clock')}</div><div><h4>优先关注超过复购周期的会员</h4><p>共有 ${num(a.eligibleDormant)} 位符合初步营销资格的沉睡会员，可进一步筛选。</p></div><button class="r-link" data-filter="dormant">›</button></div><div class="recommend"><div class="r-ico">${icon('heart')}</div><div><h4>护理提醒也可以是一种关怀</h4><p>可根据上次服务类型，提供卸甲、补甲或甲周护理提示。</p></div></div><div class="recommend"><div class="r-ico">${icon('shield')}</div><div><h4>人审后才执行模拟触达</h4><p>所有消息都先进入审核任务中心，未获批准不得执行。</p></div><button class="r-link" data-view="campaigns">›</button></div></section></div><div class="bottom-grid"><section class="panel"><div class="panel-head"><h3>值得优先了解的会员</h3><button class="textlink" data-view="members">会员中心 →</button></div><table class="mini-table"><thead><tr><th>会员</th><th>上次到店</th><th>偏离倍数</th><th>状态</th><th></th></tr></thead><tbody>${[
-            members[0],
-            ...members
-                .filter((m) => m.id !== 'M0001' && canContact(m) && m.lifecycle === 'dormant')
-                .sort((x, y) => priorityScore(y) - priorityScore(x))
-                .slice(0, 4),
-        ]
-            .map(
-                (m) =>
-                    `<tr><td><b>${m.id}</b><div class="rowmeta">${m.style} / ${m.level}</div></td><td>${m.days} 天前</td><td>${m.ratio}×</td><td>${chip(m.lifecycle)}</td><td><button class="member-link" data-member="${m.id}">查看 →</button></td></tr>`,
-            )
-            .join(
-                '',
-            )}</tbody></table></section><section class="care-card"><p class="kicker" style="color:#ab8a75;margin-bottom:12px">AFTERCARE JOURNEY</p><h3>不只复购，更懂护理</h3><p>美甲之后的养护、到期前的维护、卸甲与甲面休息，也能成为温柔的会员服务。</p><button class="btn secondary small" data-action="care">看看护理服务建议 →</button></section></div><p class="footnote">所有会员、交易、互动和复盘结果均为模拟演示数据。未接入真实企业微信或大模型 API。</p>`;
+    function prepareCare(id) {
+        const member = members.find((member) => member.id === id);
+        if (!member || !canContact(member) || member.careHandled) return toast('会员已处理或不满足联系资格');
+        careMemberId = id;
+        closeModal();
+        if (view !== 'dashboard') setView('dashboard');
+        else render();
+        const section = document.getElementById('care-preparation');
+        section.scrollIntoView({block: 'start'});
+        section.querySelector('h2').focus({preventScroll: true});
     }
+
+    function carePreparation() {
+        const member = members.find((member) => member.id === careMemberId);
+        if (!member || !canContact(member) || member.careHandled) return '';
+        const draft = careDrafts.get(member.id) || {};
+        const earliest = new Date(DEMO_DATE);
+        earliest.setUTCDate(earliest.getUTCDate() + 14);
+        const options = CARE_OUTCOMES.map((outcome) =>
+            `<option ${outcome === (draft.outcome || '已沟通') ? 'selected' : ''}>${outcome}</option>`
+        ).join('');
+        return `<section id="care-preparation" class="section-spacer" aria-label="沟通准备单">
+            <div class="detail-head"><div><p class="eyebrow">PREPARE TO CONNECT / ${member.id}</p>
+                <h2 tabindex="-1">${member.id} · 沟通准备单</h2></div><span class="pill">${LIFECYCLE_LABELS[member.lifecycle]}</span></div>
+            <div class="detail-grid">
+                <div class="facts"><h3>已知事实 / 为什么值得关注</h3>
+                    <p>距上次到店 ${member.days} 天，个人周期 ${member.cycle} 天，偏离 ${member.ratio} 倍。<br>最近到店 ${escapeHtml(member.lastVisit)}；偏好 ${escapeHtml(member.style)} / ${escapeHtml(member.secondary)}。</p>
+                    <h3>待确认的问题</h3><p>近期是否有美甲需求、上次体验如何、未到店原因，均待本人确认。</p>
+                    <h3>可参考的开场</h3><p class="quote">最近还会想做美甲吗？如果暂时不需要也没关系，有什么希望我们改进的地方，也想听听你的想法。</p>
+                    <h3>这次沟通的小目标</h3><p>了解本人明确表达的需求，或确认希望怎样被联系。</p>
+                    <button class="btn outline" data-member="${member.id}">查看会员详情</button>
+                </div>
+                <form id="care-form" class="form-panel" data-member-id="${member.id}">
+                    <h3>聊完，留下下一步</h3>
+                    <div class="field"><label for="care-outcome">处理结果</label><select id="care-outcome" name="outcome">${options}</select></div>
+                    <div class="field"><label for="care-note">顾客明确反馈 / 处理原因</label><textarea id="care-note" name="note" required maxlength="1000" placeholder="记录本人表达的需求；未回复时说明联系情况。">${escapeHtml(draft.note || '')}</textarea></div>
+                    <div class="field"><label for="care-owner">跟进负责人</label><input id="care-owner" name="owner" required maxlength="80" autocomplete="off" value="${escapeHtml(draft.owner || '')}"></div>
+                    <div class="field"><label class="check-label"><input id="care-follow" type="checkbox" name="follow" ${draft.follow ? 'checked' : ''}>记录后续跟进计划</label>
+                        <label for="care-date">计划日期 · 基准日 ${DEMO_DATE}</label><input type="date" id="care-date" name="date" value="${escapeHtml(draft.date || earliest.toISOString().slice(0, 10))}" ${draft.follow ? '' : 'disabled'}>
+                    </div>
+                    <p class="helper">已沟通或未回复的跟进日期至少间隔 14 天。推荐不合适、不再营销不能安排跟进。计划供店主查看。</p>
+                    <p class="helper">本次保存的是模拟沟通记录，不计入营销复盘消费。</p>
+                    <button class="btn" type="submit">保存关怀记录</button>
+                </form>
+            </div>
+        </section>`;
+    }
+
+    function careHistory() {
+        const rows = careRecords.map((record) => `<tr>
+            <td>${record.memberId}</td><td>${record.outcome}</td>
+            <td class="wrap">${escapeHtml(record.note)}</td><td>${escapeHtml(record.owner)}</td>
+            <td>${record.followUp || '未安排'}</td><td>${record.recordedAsOf}</td>
+        </tr>`).join('');
+        return `<details id="care-history" ${careRecords.length ? 'open' : ''}>
+            <summary>关怀记录与后续计划 · ${careRecords.length} 条</summary>
+            ${rows ? `<div class="table-wrap"><table><thead><tr><th>会员</th><th>处理结果</th><th>反馈 / 原因</th><th>负责人</th><th>计划跟进</th><th>记录基准日</th></tr></thead><tbody>${rows}</tbody></table></div>` : '<p class="helper">还没有关怀记录。</p>'}
+            <p class="helper">记录保存至数据库。已处理会员在本轮演示中不再推荐；计划仅供查看，不自动提醒或重新入队。重置演示会清空记录。</p>
+        </details>`;
+    }
+
+    function saveCare(form) {
+        const data = new FormData(form);
+        const memberId = form.dataset.memberId;
+        return save('/care-records', {
+            memberId,
+            outcome: data.get('outcome'),
+            note: data.get('note'),
+            owner: data.get('owner'),
+            followUp: data.has('follow') ? data.get('date') : null,
+        }, () => {
+            careDrafts.delete(memberId);
+            careMemberId = null;
+            render();
+            document.getElementById('care-history').scrollIntoView({block: 'nearest'});
+            toast('关怀记录与后续计划已保存');
+        });
+    }
+
+    function flipCard(id) {
+        const hanger = document.querySelector(`[data-candidate="${id}"]`);
+        if (!hanger) return;
+        const card = hanger.querySelector('.card');
+        const flipped = card.classList.toggle('flipped');
+        const front = card.querySelector('.front');
+        const back = card.querySelector('.back');
+        front.inert = flipped;
+        back.inert = !flipped;
+        front.setAttribute('aria-hidden', String(flipped));
+        back.setAttribute('aria-hidden', String(!flipped));
+        (flipped ? back : front).querySelector('[data-action="flip"]').focus({preventScroll:true});
+    }
+
+    function dashboard() {
+        const stats = metrics();
+        const segments = Object.entries(stats.counts).map(([lifecycle, count], index) =>
+            `<div class="life-segment life-${index}" style="flex:${Math.max(1,count)}"><b>${num(count)}</b><span>${LIFECYCLE_LABELS[lifecycle]}</span></div>`
+        ).join('');
+        return `<div class="overview-grid">
+            <section><p class="eyebrow">THE STUDIO / 会员近况</p>
+                <h2>记住每一份偏爱，<br>让下一次相见<em>恰逢其时。</em></h2>
+                <p class="muted">从 ${num(members.length)} 位虚拟会员的复购节奏中，安排今天值得发出的问候。</p>
+                <div class="lifecycle-strip" aria-label="会员生命周期分布">${segments}</div>
+                <p class="helper">依据个人复购周期分类 · 已授权、无投诉、无未来预约且至少 14 天未联系才可入选。</p>
+                <button class="btn outline" data-view="members">查看会员档案 ↗</button>
+            </section>
+            <aside class="work-ticket"><p class="eyebrow">YOUR QUEUE / 工作队列</p>
+                <div class="ticket-number">${String(stats.pending).padStart(2,'0')}</div>
+                <h3>条任务，等你过目。</h3><button data-view="campaigns">进入任务审核 ↗</button>
+                <div class="ticket-row"><span>已模拟执行</span><b>${stats.executed}</b></div>
+                <div class="ticket-row"><span>持有储值余额</span><b>${num(stats.balanced)}</b></div>
+            </aside>
+        </div>${goalPanel()}${carePreparation()}${careHistory()}`;
+    }
+
     function membersPage() {
         const ff = (m) =>
             filter === 'all' ||
@@ -304,9 +396,30 @@
         return `${head('经营效果复盘', 'PERFORMANCE & INSIGHTS', '每一步都有记录：从会员分析、审核到模拟触达与效果追踪。', `<button class="btn outline" data-action="reset">${icon('clock')} 重置演示</button>`)}<div class="alert">注意：以下转化、到店及消费数据仅由演示情景规则模拟，不代表真实营销效果、真实收入或经过验证的增量。未设置对照组。</div><div class="goal-tabs" aria-label="复盘经营目标">${tabs}</div><div class="report-row">${stat.map(([l, v]) => `<div class="rep-stat"><span>${l}</span><b>${typeof v === 'number' ? num(v) : v}</b></div>`).join('')}</div><div class="dashboard-grid"><div class="panel"><div class="panel-head"><h3>经营漏斗 · 演示场景</h3><span>会员人数 / 任务数</span></div>${entries.map(([l, n]) => `<div class="statbar"><label>${l}</label><div><div style="width:${Math.round((n / Math.max(1, scopedTasks.length)) * 100)}%"></div></div><strong>${num(n)}</strong></div>`).join('')}<p class="notice">按所选经营目标统计任务；触达及后续阶段仅统计已模拟执行的任务。</p></div><div class="panel"><div class="panel-head"><h3>模拟操作记录</h3><span>记录演示数据库中的操作</span></div><div class="logs">${logs.length ? logs.map((l) => `<div class="logitem"><b>[${escapeHtml(l.time)}] ${escapeHtml(l.name)}</b><br/>${escapeHtml(l.desc)}</div>`).join('') : '尚未执行任何页面操作。试着点击「运行模拟经营分析」。'}</div><div class="separator"></div><div class="care-card" style="min-height:130px;padding:18px"><h3 style="font-size:16px">如何理解经营增量？</h3><p>真正的增量消费需要与未触达的对照组比较；储值余额消费也不等于新增现金流。</p></div></div></div>`;
     }
     function render() {
-        document.getElementById('app').innerHTML =
-            `<div class="shell">${sidebar()}<main class="main">${topbar()}${{ dashboard, members: membersPage, campaigns, reports }[view]()}<p class="footnote">NAILMATE AI · HACKATHON CONCEPT PREVIEW · 100% SIMULATION</p></main></div>`;
+        const pages = {
+            dashboard: ['01', '经营驾驶舱', '指尖的美好，值得再次相见。', dashboard],
+            members: ['02', '会员分析', '记得她的偏爱，也关心她的近况。', membersPage],
+            campaigns: ['03', '任务审核', '一份用心问候，由你细细确认。', campaigns],
+            reports: ['04', '经营复盘', '每一次重逢，都留下回响。', reports],
+        };
+        const [index, title, motto, pageRenderer] = pages[view];
+        document.getElementById('content').innerHTML = pageRenderer();
+        document.getElementById('page-title').textContent = title;
+        document.getElementById('page-motto').textContent = motto;
+        document.getElementById('page-index').textContent = index + ' / 工作空间';
+        document.getElementById('edition-name').textContent = title;
+        document.querySelectorAll('[data-member-count]').forEach((element) => { element.textContent = num(members.length); });
+        document.querySelectorAll('#sidebar [data-view]').forEach((button) => {
+            if (button.dataset.view === view) button.setAttribute('aria-current', 'page');
+            else button.removeAttribute('aria-current');
+        });
+        const pending = tasks.filter((task) => task.status === 'pending_review').length;
+        document.getElementById('pending-badge').textContent = pending || '';
+        document.getElementById('logs').innerHTML = logs.length ? logs.map((entry) =>
+            `<li>[${escapeHtml(entry.time)}] ${escapeHtml(entry.desc)}</li>`
+        ).join('') : '<li>暂无操作记录。</li>';
     }
+
     function modal(html) {
         document.getElementById('overlay').innerHTML =
             `<div class="modal-mask" data-action="close-backdrop"><div class="modal" role="dialog" aria-modal="true" aria-label="详情">${html}</div></div>`;
@@ -322,7 +435,7 @@
         if (!m) return;
         let p = productFor(m);
         modal(
-            `${headModal('MEMBER PROFILE · DEMO', m.id + ' · 会员详情')}<div style="display:flex;gap:9px;align-items:center">${chip(m.lifecycle)}<span class="tiny-note">${m.level} · ${m.style} / ${m.secondary}</span></div><div class="detailgrid"><div class="detailitem"><small>距离最近到店</small><strong>${m.days} 天</strong></div><div class="detailitem"><small>平均复购周期</small><strong>${m.cycle} 天</strong></div><div class="detailitem"><small>复购偏离</small><strong>${m.ratio} ×</strong></div><div class="detailitem"><small>累计消费</small><strong>${money(m.spend)}</strong></div><div class="detailitem"><small>储值余额</small><strong>${money(m.bal)}</strong></div><div class="detailitem"><small>历史消费次数</small><strong>${m.visits} 次</strong></div></div><div class="sectlabel">经营判断与数据依据</div><div class="quote">${m.days} 天未到店，平均 ${m.cycle} 天到店一次；当前分类为「${LIFECYCLE_LABELS[m.lifecycle]}」。${canContact(m) ? '已通过初步营销资格过滤，可考虑人工审核后进行个性化关怀。' : !m.consent ? '未获营销授权，已从经营目标候选中排除。' : '当前存在营销资格限制，暂不应营销触达。'}<br/>授权：${m.consent ? '已同意' : '未同意'} · 近期联系：${m.contactDays} 天前 · 未处理投诉：${m.complaint ? '有' : '无'} · 未来预约：${m.appointment ? '有' : '无'}</div><div class="sectlabel">新品推荐参考</div><div class="quote">${p ? `${p.name} · ${p.style} · ${money(p.price)}（虚拟产品库）` : '暂无匹配款式'}</div><div class="modal-actions"><button class="btn outline" data-action="close">关闭</button><button class="btn" data-action="newtask" data-id="${m.id}" ${!canContact(m) ? 'disabled title="未通过营销资格"' : ''}>加入待审核任务</button></div>`,
+            `${headModal('MEMBER PROFILE · DEMO', m.id + ' · 会员详情')}<div style="display:flex;gap:9px;align-items:center">${chip(m.lifecycle)}<span class="tiny-note">${m.level} · ${m.style} / ${m.secondary}</span></div><div class="detailgrid"><div class="detailitem"><small>距离最近到店</small><strong>${m.days} 天</strong></div><div class="detailitem"><small>平均复购周期</small><strong>${m.cycle} 天</strong></div><div class="detailitem"><small>复购偏离</small><strong>${m.ratio} ×</strong></div><div class="detailitem"><small>累计消费</small><strong>${money(m.spend)}</strong></div><div class="detailitem"><small>储值余额</small><strong>${money(m.bal)}</strong></div><div class="detailitem"><small>历史消费次数</small><strong>${m.visits} 次</strong></div></div><div class="sectlabel">经营判断与数据依据</div><div class="quote">${m.days} 天未到店，平均 ${m.cycle} 天到店一次；当前分类为「${LIFECYCLE_LABELS[m.lifecycle]}」。${canContact(m) ? '已通过初步营销资格过滤，可考虑人工审核后进行个性化关怀。' : !m.consent ? '未获营销授权，已从经营目标候选中排除。' : '当前存在营销资格限制，暂不应营销触达。'}<br/>授权：${m.consent ? '已同意' : '未同意'} · 近期联系：${m.contactDays} 天前 · 未处理投诉：${m.complaint ? '有' : '无'} · 未来预约：${m.appointment ? '有' : '无'}</div><div class="sectlabel">新品推荐参考</div><div class="quote">${p ? `${p.name} · ${p.style} · ${money(p.price)}（虚拟产品库）` : '暂无匹配款式'}</div><div class="modal-actions"><button class="btn outline" data-action="close">关闭</button><button class="btn outline" data-action="prepare-care" data-id="${m.id}" ${!canContact(m) || m.careHandled ? 'disabled' : ''}>沟通准备</button><button class="btn" data-action="newtask" data-id="${m.id}" ${!canContact(m) ? 'disabled title="未通过营销资格"' : ''}>加入待审核任务</button></div>`,
         );
     }
     function taskModal(id) {
@@ -428,7 +541,7 @@
         );
     }
     function reset() {
-        if (!window.confirm('重置会清空共享演示任务和操作记录。确定继续吗？')) return;
+        if (!window.confirm('重置会清空共享演示任务、关怀记录和操作日志。确定继续吗？')) return;
         return save('/reset', {}, () => {
             filter = 'all';
             search = '';
@@ -436,6 +549,8 @@
             taskFilter = 'all';
             selectedGoal = 'wake';
             reportGoal = 'all';
+            careMemberId = null;
+            careDrafts.clear();
             closeModal();
             render();
             toast('已重置为初始演示场景');
@@ -448,7 +563,7 @@
 
     document.addEventListener('click', (event) => {
         const control = event.target.closest(controlSelector);
-        if (!control || control.disabled) return;
+        if (!control || control.disabled || saving) return;
 
         const {
             view: targetView,
@@ -489,6 +604,15 @@
         }
 
         switch (action) {
+            case 'menu': {
+                const open = document.body.classList.toggle('menu-open');
+                control.setAttribute('aria-expanded', String(open));
+                return;
+            }
+            case 'prepare-care':
+                return prepareCare(id);
+            case 'flip':
+                return flipCard(id);
             case 'close':
                 return closeModal();
             case 'close-backdrop':
@@ -517,8 +641,31 @@
         }
     });
 
+    function rememberCareDraft(form) {
+        const values = Object.fromEntries(new FormData(form));
+        const date = form.querySelector('[name="date"]').value;
+        careDrafts.set(form.dataset.memberId, { ...values, date });
+    }
+
+    document.addEventListener('submit', (event) => {
+        if (event.target.id !== 'care-form') return;
+        event.preventDefault();
+        if (!saving) saveCare(event.target);
+    });
+
+    document.addEventListener('change', (event) => {
+        const form = event.target.closest('#care-form');
+        if (!form) return;
+        if (event.target.id === 'care-follow') {
+            form.querySelector('#care-date').disabled = !event.target.checked;
+        }
+        rememberCareDraft(form);
+    });
+
     document.addEventListener('input', (event) => {
         const input = event.target;
+        const careForm = input.closest('#care-form');
+        if (careForm) rememberCareDraft(careForm);
         if (input.id !== 'member-search') return;
 
         search = input.value;
@@ -532,13 +679,17 @@
         searchInput.setSelectionRange(selectionStart, selectionEnd);
     });
     document.addEventListener('keydown', (ev) => {
-        if (ev.key === 'Escape') closeModal();
+        if (ev.key === 'Escape') {
+            closeModal();
+            document.body.classList.remove('menu-open');
+            document.getElementById('menu-toggle').setAttribute('aria-expanded', 'false');
+        }
     });
     api('/state').then((state) => {
         applyState(state);
         render();
     }).catch((error) => {
-        document.getElementById('app').innerHTML = `<main class="main"><p class="alert">加载演示数据失败：${escapeHtml(error.message)}</p><button class="btn" id="retry-load">重试</button></main>`;
+        document.getElementById('content').innerHTML = `<p class="alert">加载演示数据失败：${escapeHtml(error.message)}</p><button class="btn" id="retry-load">重试</button>`;
         document.getElementById('retry-load').addEventListener('click', () => location.reload());
     });
 })();

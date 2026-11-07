@@ -4,7 +4,7 @@ const path = require('node:path');
 const express = require('express');
 const { connect, transaction } = require('./db');
 const store = require('./store');
-const { GOALS, SCENARIOS, MAX_TASKS_PER_ANALYSIS, canContact, goalCandidates, buildReviewTask } = require('../public/rules');
+const { GOALS, SCENARIOS, MAX_TASKS_PER_ANALYSIS, DEMO_DATE, CARE_OUTCOMES, canContact, goalCandidates, buildReviewTask } = require('../public/rules');
 
 function requireCondition(condition, status, message) {
     if (!condition) throw Object.assign(new Error(message), { apiStatus: status });
@@ -94,7 +94,37 @@ function createApp(pool) {
         await store.log(tx, 'simulate_campaign_execution', `${task.memberId} · ${task.strategy} · ${SCENARIOS[scenario].label}`);
     }));
 
-    app.post('/api/reset', mutate(async (_req, tx, { members }) => {
+    app.post('/api/care-records', mutate(async (req, tx, current) => {
+        const { memberId, outcome, note, owner, followUp = null } = req.body ?? {};
+        requireCondition(typeof memberId === 'string' && /^M\d{4}$/.test(memberId) && CARE_OUTCOMES.includes(outcome),
+            400, '请选择有效的会员和处理结果');
+        const cleanNote = typeof note === 'string' ? note.trim() : '';
+        const cleanOwner = typeof owner === 'string' ? owner.trim() : '';
+        requireCondition(cleanNote.length > 0 && cleanNote.length <= 1000 && cleanOwner.length > 0 && cleanOwner.length <= 80,
+            400, '请填写反馈或原因（最多 1000 字符）和负责人（最多 80 字符）');
+        if (followUp !== null) {
+            const validDate = typeof followUp === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(followUp) &&
+                Number.isFinite(Date.parse(followUp)) && new Date(followUp).toISOString().slice(0, 10) === followUp;
+            requireCondition(validDate && followUp > DEMO_DATE, 400, '请填写晚于演示基准日的有效跟进日期');
+            requireCondition(!['推荐不合适', '不再营销'].includes(outcome), 400, '此处理结果不应安排再次联系');
+            const earliest = new Date(DEMO_DATE);
+            earliest.setUTCDate(earliest.getUTCDate() + 14);
+            requireCondition(!['已沟通', '未回复'].includes(outcome) || followUp >= earliest.toISOString().slice(0, 10),
+                400, '已联系会员的计划跟进至少间隔 14 天');
+        }
+        const member = current.members.find((item) => item.id === memberId);
+        requireCondition(member, 404, '会员不存在');
+        requireCondition(canContact(member) && !member.careHandled, 409, '会员已处理或当前不满足联系资格，请刷新后重试');
+        await store.insertCareRecord(tx, {
+            memberId, outcome, note: cleanNote, owner: cleanOwner, followUp, recordedAsOf: DEMO_DATE,
+        });
+        await store.log(tx, 'save_care_record', `${memberId} · ${outcome} · 负责人 ${cleanOwner}`);
+    }));
+
+    app.post('/api/reset', mutate(async (_req, tx) => {
+        // 关怀限制由记录派生；清空记录后从基础会员资料恢复初始演示资格。
+        await tx.request().query('DELETE FROM dbo.CareRecords;');
+        const { members } = await store.state(tx);
         const demoMember = members.find((member) => member.id === 'M0001');
         requireCondition(demoMember, 409, '请先初始化演示会员');
         await tx.request().query('DELETE FROM dbo.OperationLogs; DELETE FROM dbo.Tasks;');

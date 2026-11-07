@@ -36,3 +36,17 @@ BEGIN
         created_at datetime2(0) NOT NULL DEFAULT SYSUTCDATETIME()
     );
 END;
+
+IF OBJECT_ID(N'dbo.CareRecords', N'U') IS NULL
+BEGIN
+    CREATE TABLE dbo.CareRecords (
+        id int IDENTITY(1, 1) NOT NULL PRIMARY KEY,
+        member_id varchar(5) NOT NULL UNIQUE REFERENCES dbo.Members(id),
+        outcome nvarchar(20) NOT NULL CHECK (outcome IN (N'已沟通', N'未回复', N'暂不联系', N'推荐不合适', N'不再营销')),
+        note nvarchar(1000) NOT NULL,
+        owner nvarchar(80) NOT NULL,
+        follow_up date NULL,
+        recorded_as_of date NOT NULL,
+        created_at datetime2(0) NOT NULL DEFAULT SYSUTCDATETIME()
+    );
+END;

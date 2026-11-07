@@ -2,6 +2,8 @@ const NailMateRules = (() => {
     'use strict';
 
     const MAX_TASKS_PER_ANALYSIS = 5;
+    const DEMO_DATE = '2026-11-07';
+    const CARE_OUTCOMES = ['已沟通', '未回复', '暂不联系', '推荐不合适', '不再营销'];
     const PRODUCTS = [
         { id: 'P001', name: '奶油法式·初雪', style: '法式', price: 168 },
         { id: 'P002', name: '晚樱裸透·温柔粉', style: '裸色', price: 148 },
@@ -29,7 +31,7 @@ const NailMateRules = (() => {
     const DEMO_SERVICE_PRICE = 168;
 
     function canContact(member) {
-        return member.consent && !member.complaint && !member.appointment && member.contactDays >= 14;
+        return member.consent && !member.complaint && !member.appointment && !member.carePaused && member.contactDays >= 14;
     }
     function priorityScore(m) {
         return Math.min(
@@ -90,13 +92,13 @@ const NailMateRules = (() => {
         const sortBy = GOALS[goal].sortBy;
         const occupied = new Set(tasks.filter((task) => task.status !== 'rejected').map((task) => task.memberId));
         return members
-            .filter((member) => matchesGoal(member, goal) && canContact(member) && !occupied.has(member.id))
+            .filter((member) => matchesGoal(member, goal) && canContact(member) && !member.careHandled && !occupied.has(member.id))
             .sort((a, b) => b[sortBy] - a[sortBy] || a.id.localeCompare(b.id))
             .slice(0, MAX_TASKS_PER_ANALYSIS);
     }
 
     return {
-        PRODUCTS, GOALS, SCENARIOS, DEMO_SERVICE_PRICE, MAX_TASKS_PER_ANALYSIS,
+        PRODUCTS, GOALS, SCENARIOS, DEMO_SERVICE_PRICE, MAX_TASKS_PER_ANALYSIS, DEMO_DATE, CARE_OUTCOMES,
         money, canContact, priorityScore, productFor, matchesGoal, goalReason, goalCandidates, buildReviewTask,
     };
 })();

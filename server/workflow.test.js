@@ -7,7 +7,7 @@ const { connect, transaction } = require('./db');
 const { createApp } = require('./main');
 const { initialize } = require('../database/setup');
 const store = require('./store');
-const { goalCandidates, SCENARIOS, DEMO_SERVICE_PRICE } = require('../public/rules');
+const { goalCandidates, SCENARIOS, DEMO_SERVICE_PRICE, CARE_OUTCOMES, canContact } = require('../public/rules');
 
 test('SQL Server 最小业务闭环验收', { timeout: 90000 }, async (t) => {
     // 仅创建和清理本次随机命名的测试库，避免重置日常演示库。
@@ -129,7 +129,69 @@ test('SQL Server 最小业务闭环验收', { timeout: 90000 }, async (t) => {
             }
         });
 
-        await t.test('重置恢复一条初始任务并清空日志', async () => {
+        await t.test('关怀字段、日期和资格校验失败时不写入', async () => {
+            const before = await state();
+            const candidate = goalCandidates(before.members, before.tasks, 'balance')[0];
+            const body = {memberId:candidate.id,outcome:'已沟通',note:'明确反馈',owner:'店长',followUp:null};
+            for (const invalid of [
+                {...body,note:' '}, {...body,owner:' '}, {...body,outcome:'未知'},
+                {...body,followUp:'2026-11-08'}, {...body,followUp:'2026-02-30'},
+                {...body,followUp:'2026-12-35'}, {...body,followUp:42},
+                {...body,outcome:'不再营销',followUp:'2026-11-21'},
+                {...body,outcome:'推荐不合适',followUp:'2026-11-21'},
+            ]) {
+                assert.equal((await post('/care-records', invalid)).status, 400);
+            }
+            assert.equal((await post('/care-records', {...body,memberId:'M0003'})).status,409);
+            assert.deepEqual((await state()).careRecords, []);
+        });
+
+        await t.test('五种关怀结果与计划落库，处理后退出推荐', async () => {
+            for (const outcome of CARE_OUTCOMES) {
+                const before = await state();
+                const candidate = goalCandidates(before.members,before.tasks,'balance')[0];
+                const followUp = ['已沟通','未回复','暂不联系'].includes(outcome) ? '2026-11-21' : null;
+                const body = {memberId:candidate.id,outcome,note:'本人反馈 <稍后联系>',owner:'验收店长',followUp};
+                const responses = await Promise.all([1,2].map(() => post('/care-records',body)));
+                assert.deepEqual(responses.map((response)=>response.status).sort(),[200,409]);
+                const current = await state();
+                const record = current.careRecords.find((record)=>record.memberId===candidate.id);
+                assert.equal(record.note,body.note);
+                assert.equal(record.owner,body.owner);
+                assert.equal(record.followUp,followUp);
+                const member = current.members.find((member)=>member.id===candidate.id);
+                assert.equal(member.careHandled,true);
+                assert.ok(!goalCandidates(current.members,current.tasks,'balance').some((member)=>member.id===candidate.id));
+                if (['已沟通','未回复'].includes(outcome)) assert.equal(member.contactDays,0);
+                if (outcome==='暂不联系') assert.equal(canContact(member),false);
+                if (outcome==='不再营销') assert.equal(member.consent,false);
+            }
+            const expected = await state();
+            const otherPool = await connect(database);
+            try {
+                const actual = await transaction(otherPool,store.state,'Shared');
+                assert.deepEqual(actual.careRecords,expected.careRecords);
+                assert.deepEqual(actual.members,expected.members);
+            } finally {
+                await otherPool.close();
+            }
+        });
+
+        await t.test('新增关怀限制后，已批准任务也不能执行', async () => {
+            const current = await state();
+            const candidate = goalCandidates(current.members,current.tasks,'balance')[0];
+            const queued = await post('/tasks',{goal:'balance',memberIds:[candidate.id]});
+            const task = (await queued.json()).state.tasks.at(-1);
+            assert.equal((await post('/tasks/'+task.id+'/review',{decision:'approve',message:'关怀后重新校验资格'})).status,200);
+            assert.equal((await post('/care-records',{memberId:candidate.id,outcome:'不再营销',note:'明确拒绝营销',owner:'店长'})).status,200);
+            assert.equal((await post('/tasks/'+task.id+'/execute',{scenario:'visit'})).status,409);
+            const saved = (await state()).tasks.find((item)=>item.id===task.id);
+            assert.equal(saved.result,null);
+        });
+
+        await t.test('重置恢复初始会员资格并清空关怀和任务记录', async () => {
+            const before = await state();
+            const affectedId = before.careRecords[0].memberId;
             assert.equal((await post('/reset', {})).status, 200);
             const current = await state();
             assert.equal(current.members.length, 2800);
@@ -137,6 +199,10 @@ test('SQL Server 最小业务闭环验收', { timeout: 90000 }, async (t) => {
             assert.equal(current.tasks[0].status, 'pending_review');
             assert.equal(current.tasks[0].goal, 'general');
             assert.deepEqual(current.logs, []);
+            assert.deepEqual(current.careRecords, []);
+            const member = current.members.find((member)=>member.id===affectedId);
+            assert.equal(member.careHandled,false);
+            assert.equal(canContact(member),true);
         });
     } finally {
         if (server) {

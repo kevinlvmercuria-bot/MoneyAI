@@ -1,8 +1,7 @@
 'use strict';
 
-const { PRODUCTS } = require('../public/rules');
+const { PRODUCTS, DEMO_DATE } = require('../public/rules');
 const STYLES = PRODUCTS.map((product) => product.style);
-const DEMO_DATE = '2026-11-07';
 
 
 

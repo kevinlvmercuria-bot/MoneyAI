@@ -10,6 +10,7 @@
 | POST `/api/tasks` | `{"goal":"balance","memberIds":["M0002"]}` | `{"created":1,"state":{...}}` |
 | POST `/api/tasks/:id/review` | `{"decision":"approve","message":"你好，需要帮你预约吗？"}` 或 `{"decision":"reject"}` | `{"state":{...}}` |
 | POST `/api/tasks/:id/execute` | `{"scenario":"booking"}` | `{"state":{...}}` |
+| POST `/api/care-records` | `{"memberId":"M0002","outcome":"已沟通","note":"顾客希望稍后联系","owner":"店长","followUp":"2026-11-21"}` | `{"state":{...}}` |
 | POST `/api/reset` | `{}` | `{"state":{...}}` |
 
 所有成功响应为 HTTP 200。错误返回 `{"error":"可读提示"}`。400 为字段或 JSON 无效，404 为接口或任务不存在，409 为候选变化、资格失效或任务状态冲突，413 为请求体超过 16 KB，415 为 POST 不是 JSON，500 为服务端或数据库错误。
@@ -42,3 +43,13 @@
 ```
 
 模拟执行前 `result` 为 `null`，审核通过前 `editedMessage` 为空字符串。
+
+## 关怀记录与跟进计划
+
+`GET /api/state` 和写入返回的 `state` 增加 `careRecords` 数组，按记录 ID 倒序。每条记录包含数字 `id`、`memberId`、`outcome`、`note`、`owner`、`followUp` 和 `recordedAsOf`。日期统一为 `YYYY-MM-DD`，未安排跟进时 `followUp` 为 `null`。基准日为 `2026-11-07`。
+
+- `outcome` 支持「已沟通」「未回复」「暂不联系」「推荐不合适」「不再营销」。反馈或原因 `note` 必填，去除首尾空白后最多 1000 字符。负责人 `owner` 必填，最多 80 字符。
+- `followUp` 可省略或传 `null`。有日期时必须是真实日期且晚于基准日。「已沟通」「未回复」至少间隔 14 天，即最早 `2026-11-21`。「推荐不合适」「不再营销」不能附带跟进计划。计划仅供查看。
+- 保存前检查会员联系资格，同一会员在本轮演示中只保存一次。重复或并发提交返回 409，记录和日志一起提交。
+- 会员快照增加 `careHandled`（是否已处理）、`carePaused`（是否暂不联系）。已处理会员退出推荐；「已沟通」「未回复」将有效 `contactDays` 设为 0；「不再营销」将有效 `consent` 设为 false。审核和执行会重新检查这些限制。
+- 这些限制由关怀记录派生，基础会员档案继续保留。重置演示时清空关怀记录、计划、任务和日志，恢复基础会员资格，重建初始任务。
