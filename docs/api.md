@@ -21,13 +21,13 @@
 - `members` 是会员快照。字符串字段为 `id`、`style`、`secondary`、`level`、`lastVisit`（`YYYY-MM-DD`）与 `lifecycle`。生命周期取值为 `active`、`due`、`low_frequency`、`dormant`。
 - 会员数值字段为 `days`（未到店天数）、`cycle`（平均复购周期天数）、`visits`（历史次数）、`spend`（累计消费，元）、`bal`（余额，元）、`contactDays`（距上次联系天数）、`ratio`（偏离倍数）。`consent`、`complaint`、`appointment` 分别表示营销授权、未处理投诉、未来预约，均为布尔值。
 - `goal` 取 `wake`（沉睡唤醒）、`balance`（余额提醒）、`launch`（新品邀约）或 `general`（通用演示）。前三种每次接收当前推荐名单中的 1 至 5 个不同会员编号。通用演示仅接收 1 位会员。后端复核整批请求，有候选失效时整批退回。
-- 五栏界面使用同一个 POST `/api/tasks`，请求为 `{"opportunity":"care","memberIds":["M0002"]}`。`opportunity` 取 `all`、`wake`、`repurchase`、`balance`、`care`，不能与 `goal` 同时提交。后端复核本机会当前推荐的最多 5 位会员，整批保存或整批退回。旧 `goal` 请求继续兼容。
-- 机会人数共用联系资格、未处理及无有效任务规则，可重叠不相加。全部机会要求周期偏离大于 1.15；沉睡要求 `dormant`；到期复购要求 `due` 或 `low_frequency`；储值关怀要求偏离大于 1.15 且有余额；护理回访要求偏离大于 1.15、有明确护理标签并同意护理跟进。`careProfile.optIn` 是从原始护理档案读取的布尔值。
-- 机会名单按已有规则优先级降序、封顶 4 倍的周期偏离降序、编号升序排序。全部机会自动为每人分配具体策略。沿用既有表结构：沉睡、储值分别保存为 `wake`、`balance`，到期复购和护理保存为 `general`，具体类别由 `strategy`、`reason` 和 `message` 表达；后两者计入复盘总览及通用演示筛选，不新增数据库目标枚举。护理任务审核和执行时再次校验护理资格。
-- 任务状态从 `pending_review` 进入 `approved` 或 `rejected`。只有 `approved` 可以进入 `executed_simulated`。通过时必须传入去除首尾空白后为 1 至 1000 字符的话术。审核通过、模拟执行时复查联系资格。一个会员同时只能有一条未拒绝任务。
+- 八栏界面使用同一个 POST `/api/tasks`，请求为 `{"opportunity":"care","memberIds":["M0002"]}`。`opportunity` 取 `all`、`wake`、`repurchase`、`balance`、`care`、`preview`、`scheduled`、`greeting`，不能与 `goal` 同时提交。后端复核本机会当前推荐的最多 8 位会员，整批保存或整批退回。旧 `goal` 请求仍最多 5 人。
+- 机会人数可重叠，不相加。普通机会共用授权、无投诉、无未来预约、至少 14 天联系冷却、未处理、无未拒绝任务的限制。沉睡要求 `dormant`；到期复购要求 `due` 或 `low_frequency`；储值关怀要求周期偏离大于 1.15 且有余额；护理回访读取最新美甲服务订单，要求距基准日 1–7 天并同意护理跟进。新品预告面向活跃会员，匹配主/次偏好和未来 14 天发布的美甲款式；日常问候要求活跃、至少 2 次消费且至少 30 天未联系。
+- 各机会按业务依据排序，同值按会员编号升序；全部机会先按定时回访、新品预告、日常问候、护理回访、沉睡、复购、储值顺序分配会员，再轮流取人，避免一种机会占满。定时回访要求已有本地关怀计划到期、无待审核/已批准任务、冷却满 14 天；同一计划只执行一次。所有模拟触达都会更新派生冷却天数。任务保留原 `goal` 枚举，具体经营目的在 `context.objective` 保存，审核和执行复核资格及产品。
+- 任务状态从 `pending_review` 进入 `approved` 或 `rejected`。只有 `approved` 可以进入 `executed_simulated`。通过时必须传入去除首尾空白后为 1 至 1000 字符的话术。一个会员只能有一条待审核/已批准任务；普通机会还排除已执行会员，定时回访可在冷却期后承接新的到期计划。
 - `scenario` 支持 `noReply`（未回复）、`reply`（已回复，未预约）、`booking`（已预约，待到店）、`visit`（已到店并消费）。只有 `visit` 产生固定演示消费 168 元。
 - `logs` 返回最新 40 条，包含 `name`（动作名）、`desc`（描述）和 `time`（北京时间 `HH:mm:ss`）。
-- 重置会删除共享演示任务和日志，保留会员，重建一条通用待审核任务。任务 ID 继续递增。
+- `POST /api/reset` 清空关怀记录、文案、演示任务和日志，重建一条通用待审核任务；保留会员、来源数据、上传图片和会员备注。任务 ID 继续递增。界面的「重置界面」只复位前端状态，不调用本接口。
 
 ## 执行后的任务示例
 
@@ -53,8 +53,8 @@
 `GET /api/state` 和写入返回的 `state` 增加 `careRecords` 数组，按记录 ID 倒序。每条记录包含数字 `id`、`memberId`、`outcome`、`note`、`owner`、`followUp` 和 `recordedAsOf`。日期统一为 `YYYY-MM-DD`，未安排跟进时 `followUp` 为 `null`。基准日为 `2026-11-07`。
 
 - `outcome` 支持「已沟通」「未回复」「暂不联系」「推荐不合适」「不再营销」。反馈或原因 `note` 必填，去除首尾空白后最多 1000 字符。负责人 `owner` 必填，最多 80 字符。
-- `followUp` 可省略或传 `null`。有日期时必须是真实日期且晚于基准日。「已沟通」「未回复」至少间隔 14 天，即最早 `2026-11-21`。「推荐不合适」「不再营销」不能附带跟进计划。计划仅供查看。
-- 保存前检查会员联系资格，同一会员在本轮演示中只保存一次。重复或并发提交返回 409，记录和日志一起提交。
+- `followUp` 可省略或传 `null`。有日期时必须是真实日期且晚于基准日。「已沟通」「未回复」至少间隔 14 天，即最早 `2026-11-21`。「推荐不合适」「不再营销」不能附带跟进计划。计划到期后可进入定时回访机会，仍须满足联系资格和冷却期。
+- 保存前检查联系资格。同一会员同一天不可重复提交；旧记录的计划已到期时可追加新反馈，保留历史记录。重复或并发提交返回 409，记录和日志一起提交。
 - 会员快照增加 `careHandled`（是否已处理）、`carePaused`（是否暂不联系）。已处理会员退出推荐；「已沟通」「未回复」将有效 `contactDays` 设为 0；「不再营销」将有效 `consent` 设为 false。审核和执行会重新检查这些限制。
 - 这些限制由关怀记录派生，基础会员档案继续保留。重置演示时清空关怀记录、计划、任务和日志，恢复基础会员资格，重建初始任务。
 
@@ -64,7 +64,7 @@
 
 导入后的 `dataSource` 包含 `kind: "sqlite_import"`、`sourceHash`、`importedAt` 和各来源表的行数 `counts`。尚未导入时为 `{ "kind": "generated_demo" }`。会员增加 `displayName`、`latestNote`、`preferredTechnician`、`cycleConfidence`、`source` 等来源信息。
 
-增强版界面使用会员快照中的 `careProfile` 摘要，包含 `memberId`、`tags`、`lastService`、`preferredService`、`followupDate` 和 `status`；没有来源护理档案时为 `null`。护理页据此排除 `not_due` 和无明确需求的来源记录，已有店主关怀记录仍可查看。会员历史接口中的 `careProfile` 继续返回原始档案字段。
+增强版界面使用会员快照中的 `careProfile` 摘要，包含 `memberId`、`tags`、`lastService`、`preferredService`、`followupDate` 和 `status`；没有来源护理档案时为 `null`。护理机会以真实近期美甲订单和 `optIn` 为准，已有店主关怀记录仍可查看。会员历史接口中的 `careProfile` 继续返回原始档案字段。
 
 会员历史接口返回来源 SQLite 中的原始字段，日期为来源字符串。`orders` 按 `order_date`、`notes` 按 `created_at`、`contacts` 按 `contact_date`、`appointments` 按 `appointment_date` 倒序，各最多 10 条。护理档案不存在时 `careProfile` 为 `null`。接口读取 SQL Server 中保存的快照；会员不存在返回 404，编号格式无效返回 400。
 
@@ -82,6 +82,37 @@
 
 每批 1 至 5 个不同会员，保存文案为 1 至 1000 字符。模型只能选择目录内可用产品，最多 2 个。无效模型或名单格式返回 400；会员联系资格失效、重复生成中的批次或不可用产品返回 409。模型服务失败按会员写入 `errors`（含 `memberId` 和可读 `error`），成功项独立保存。批次级错误不会写入文案。图片最多 5 MB，超限返回 413；格式不符返回 400。
 
-`style` 可省略，默认 `friendly`（自然亲切），兼容旧请求。其他值为 `concise`（简洁直接）、`caring`（温柔关怀）、`professional`（专业推荐）；非法值返回 400，且不调用模型、不写入文案。风格映射为服务端固定的语气和篇幅要求，实际传入模型系统提示；不改变会员事实和产品资格规则。风格是本次生成参数，不新增数据库字段，保存的文案内容仍按原契约返回。
+`style` 可省略，默认 `friendly`（自然亲切），兼容旧请求。其他值为 `concise`（简洁直接）、`caring`（温柔关怀）、`professional`（专业推荐）；非法值返回 400，且不调用模型、不写入文案。风格映射为服务端固定的语气和篇幅要求，实际传入模型系统提示；不改变会员事实和产品资格规则。风格仍是本次生成参数，记录在可空的 `context_json` 中；旧字段保持原契约。
 
 模型调用在数据库事务外执行，保存前再次核对会员资格和产品资料。图片以新记录保存，每个产品使用最新绑定图；旧图片 URL 继续有效。更换产品图片不改写生成文案。保存修改会清除该文案的旧复制标记，复制时间独立保存，复制不会改变任务、预约或消费数据。重置演示清除 `CopyDrafts`，保留产品图片；生成进行中重置返回 409。
+
+## 关系经营版新增契约（v4.0）
+
+旧请求仍可省略 `context`。新版生成请求指定沟通目的与产品：
+
+```json
+{
+  "memberIds": ["M0001"],
+  "model": "Qwen/Qwen3.6-Flash",
+  "style": "friendly",
+  "context": { "objective": "balance", "productId": "P001" }
+}
+```
+
+`context.objective` 支持 `wake`、`repurchase`、`balance`、`launch`、`care`、`preview`、`scheduled`、`greeting`。普通目的要求选中有效产品；`preview` 仅允许实际匹配的未发布款；`scheduled`、`greeting` 的 `productId` 为 `null`，生成结果允许 `productIds: []`。服务端按本次目的缩小模型可选目录，生成后与保存前再次校验。模型服务仍使用 60 秒超时、900 个输出 token 上限；密钥始终留在服务端。
+
+状态中的任务和文案增加可空 `context`，旧记录为 `null`。定时回访的 `followUp` 由服务端确定；任务可另外包含 `copyDraftId`（来源文案编号）、`executedOn`（模拟触达基准日）。会员增加 `recentNailVisit`（最近 7 天美甲订单事实或 `null`）、`followupRecord`（最新本地反馈或 `null`）、`executedFollowups`（已执行回访计划日期数组）。同一会员的关怀历史不再被新反馈覆盖。
+
+产品快照可包含 `planned: true` 的演示新品灵感 `IDEA-SEA-SALT`，计划发布日期为 `2026-11-14`，`price: null`。它仅由规则追加到演示快照，不写入现有产品表，不作为现售商品推荐；数据库中的 24 条原产品保留。
+
+| 方法和路径 | 请求示例 | 成功响应 |
+| --- | --- | --- |
+| POST `/api/members/:id/notes` | `{"noteId":null,"type":"preference","text":"喜欢清透款","pinned":true,"author":"店主"}` | `{"state":{...},"details":{...}}` |
+| POST `/api/copy/manual` | `{"memberId":"M0001","message":"店主手写内容","context":{"objective":"greeting","productId":null}}` | `{"draftId":13,"state":{...}}` |
+| POST `/api/tasks/from-copy` | `{"draftId":13,"message":"店主最终确认的内容"}` | `{"created":1,"taskId":"T0002","state":{...}}` |
+
+备注 `type` 为 `preference`、`communication`、`service`、`care`、`appointment`；`text` 为 1–1200 字符，`author` 为 1–80 字符，`pinned` 为布尔值。`noteId: null` 新增；传本会员已有备注编号则编辑/置顶。编辑以本地覆盖层保存，保留原始来源记录，跨会员编号返回 404。会员详情合并覆盖层，优先展示置顶备注。
+
+手写文案为 1–1000 字符，复用实际产品与联系资格校验，不调用模型。提交审核从数据库读取文案；可选 `message` 用于检查当前页面与已保存文本是否一致，不一致返回 409。先保存编辑再提交，保证审核内容是店主修改后的版本。重复提交或资格失效不会重复创建任务。
+
+页面「演示工具 → 重置界面」只恢复导航、筛选、选择、未保存输入和界面临时状态；已保存文案、备注、任务、关怀、上传图均保留。另一个「清空演示数据」操作确认后才调用原 `POST /api/reset`。

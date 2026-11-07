@@ -865,169 +865,6 @@ input[type='radio'] {
     }
 }
 
-/* 单会员工作台：草稿、配图与反馈都围绕当前会员，不铺开历史记录。 */
-.studio-single {
-    grid-template-columns: minmax(250px, 0.75fr) minmax(0, 1.5fr);
-    gap: 24px;
-}
-.studio-single .wb-context,
-.studio-single .wb-output {
-    padding: 24px;
-}
-.studio-single .wb-context > h3 {
-    margin: 0 0 18px;
-    font-size: 21px;
-}
-.studio-single .wb-field select {
-    width: 100%;
-    font-size: 13px;
-}
-.studio-single .wb-member {
-    margin: 20px 0 15px;
-}
-.studio-single .wb-facts > div {
-    padding: 5px 0;
-    grid-template-columns: 76px minmax(0, 1fr);
-}
-.studio-single .wb-note-section {
-    padding-top: 18px;
-}
-.studio-single .wb-note-section p {
-    font-size: 13px;
-    line-height: 1.85;
-    margin: 0 0 8px;
-}
-.studio-single .wb-output-header {
-    margin-bottom: 14px;
-    padding-bottom: 14px;
-}
-.studio-single .wb-generate-row {
-    margin: 14px 0;
-}
-.studio-single .copy-result {
-    padding: 0;
-    border: 0;
-}
-.studio-single .studio-reason {
-    margin: 10px 0 15px;
-    padding: 9px 12px;
-    background: transparent;
-}
-.studio-single .studio-reason p {
-    font-size: 12px;
-    line-height: 1.8;
-}
-.studio-single .copy-result > label {
-    display: block;
-    margin: 12px 0 8px;
-}
-.studio-single .copy-result > textarea {
-    min-height: 140px;
-    max-height: 280px;
-    font-size: 14px;
-    line-height: 1.85;
-}
-.studio-single .copy-products {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 10px;
-    margin: 14px 0;
-}
-.studio-single .copy-product {
-    display: grid;
-    grid-template-columns: 64px minmax(0, 1fr);
-    align-items: start;
-    gap: 10px;
-    padding: 10px;
-}
-.studio-single .copy-product img {
-    width: 64px;
-    height: 86px;
-    object-fit: cover;
-}
-.studio-single .copy-product-info {
-    min-width: 0;
-    display: flex;
-    flex-direction: column;
-    gap: 5px;
-}
-.studio-single .copy-product-info strong {
-    font-size: 13px;
-    line-height: 1.6;
-}
-.studio-single .copy-product-info span,
-.studio-single .copy-product-info a {
-    font-size: 11px;
-    line-height: 1.6;
-    overflow-wrap: anywhere;
-}
-.studio-single .wb-customer-preview {
-    margin: 14px 0;
-    padding: 11px 14px;
-}
-.studio-single .wb-customer-preview summary {
-    font-size: 13px;
-}
-.studio-single .wb-chat-message {
-    position: static;
-    display: block;
-    width: 100%;
-    min-width: 0;
-    max-height: 150px;
-    overflow: auto;
-    margin-top: 12px;
-    padding: 12px;
-    font-size: 14px;
-    white-space: pre-wrap;
-    overflow-wrap: anywhere;
-}
-.studio-single .wb-note {
-    font-size: 11px;
-    margin-top: 10px;
-}
-.studio-single .wb-followup {
-    margin-top: 20px;
-    padding: 11px 14px;
-}
-.studio-single .wb-followup > summary {
-    font-size: 15px;
-}
-.studio-single .wb-followup form {
-    padding-top: 14px;
-}
-.studio-single .wb-followup textarea {
-    min-height: 90px;
-}
-.studio-empty {
-    padding: 32px 18px;
-    font-size: 14px;
-}
-@media (max-width: 1000px) {
-    .studio-single {
-        grid-template-columns: 1fr;
-    }
-}
-@media (max-width: 650px) {
-    .studio-single .wb-context,
-    .studio-single .wb-output {
-        padding: 18px 16px;
-    }
-    .studio-single .copy-products {
-        grid-template-columns: 1fr;
-    }
-    .studio-single .wb-generate-row {
-        flex-direction: row;
-        align-items: center;
-        gap: 10px;
-    }
-    .studio-single .wb-generate-row p {
-        font-size: 11px;
-    }
-    .studio-single .wb-generate-row button {
-        font-size: 12px;
-        padding: 8px 10px;
-    }
-}
-
 /* 模型选择与生成并排，复用原有多模型 API，不扩展工作台页面长度。 */
 .studio-ai-controls {
     display: flex;
@@ -1069,5 +906,109 @@ input[type='radio'] {
     .studio-ai-controls > button {
         padding: 9px 10px;
         font-size: 12px;
+    }
+}
+
+/* 关系经营版：继承附件主视觉，以下仅连接现有 API 组件与演示工具。 */
+main {
+    margin-left: 0;
+    max-width: 1320px;
+    margin-inline: auto;
+    padding: 26px 40px var(--dock-space);
+}
+.edition-actions {
+    display: flex;
+    align-items: center;
+    gap: 18px;
+}
+.demo-tools {
+    position: relative;
+    margin: 0;
+    padding: 0;
+    border: 0;
+    background: transparent;
+}
+.demo-tools > summary {
+    list-style: none;
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    padding: 8px 14px;
+    font:
+        12px 'Microsoft YaHei',
+        sans-serif;
+    background: #fffaf7a0;
+}
+.demo-tools-panel {
+    position: absolute;
+    right: 0;
+    top: calc(100% + 9px);
+    z-index: 30;
+    width: min(320px, 85vw);
+    padding: 20px;
+    border: 1px solid var(--line);
+    border-radius: 15px;
+    background: #fffaf7f5;
+    box-shadow: 0 12px 32px #442d3826;
+    backdrop-filter: blur(20px);
+    font:
+        13px/1.8 'Microsoft YaHei',
+        sans-serif;
+    letter-spacing: 0;
+}
+.demo-tools-panel p {
+    color: var(--muted);
+    margin: 8px 0 14px;
+}
+.demo-tools-panel > button {
+    width: 100%;
+}
+.catalog-product-image .swatch-photo img {
+    object-fit: contain;
+}
+.catalog-product-title strong {
+    font-size: 13px;
+}
+.wb-output .copy-result {
+    padding: 0;
+    border: 0;
+}
+.wb-output #message-draft {
+    min-height: 200px;
+}
+.studio-ai-controls {
+    margin-top: 18px;
+}
+#toaster {
+    bottom: calc(var(--dock-space) + 10px);
+}
+.profile-note-toolbar {
+    flex-wrap: wrap;
+}
+.profile-note-form textarea {
+    min-height: 95px;
+}
+@media (max-width: 900px) {
+    main {
+        padding: 22px 24px var(--dock-space);
+    }
+}
+@media (max-width: 650px) {
+    main {
+        padding: 18px 16px var(--dock-space);
+    }
+    .edition-actions {
+        gap: 8px;
+        align-items: flex-end;
+        flex-direction: column;
+    }
+    .demo-tools > summary {
+        padding: 6px 10px;
+        font-size: 11px;
+    }
+    .brand {
+        font-size: 37px;
+    }
+    .demo-tools-panel {
+        right: 0;
     }
 }

@@ -15,19 +15,21 @@ export function imageUpload() {
 
 export function productsPage() {
     const query = state.productSearch.trim().toLowerCase();
-    const products = state.products.filter(
-        (product) =>
-            (state.productFilter === 'all' || product.type === state.productFilter) &&
-            (!state.productsWithoutImage || !productImage(product)) &&
-            (!query ||
-                `${product.id} ${product.name} ${product.style} ${product.description}`
-                    .toLowerCase()
-                    .includes(query)),
-    );
+    const products = [...state.products]
+        .sort((a, b) => Number(Boolean(b.planned)) - Number(Boolean(a.planned)))
+        .filter(
+            (product) =>
+                (state.productFilter === 'all' || product.type === state.productFilter) &&
+                (!state.productsWithoutImage || !productImage(product)) &&
+                (!query ||
+                    `${product.id} ${product.name} ${product.style} ${product.description}`
+                        .toLowerCase()
+                        .includes(query)),
+        );
     const pages = Math.max(1, Math.ceil(products.length / 8));
     state.productPage = Math.max(1, Math.min(state.productPage, pages));
     const choices = [['all', '全部'], ...Object.entries(TYPES)];
-    return `${head('让每一款，都有一张好看的图。', 'THE COLLECTION', '按已有门店产品展示参考图，随时替换成自己的实拍。', '<button data-view="members">回到会员档案</button>')}
+    return `${head('让每一款，都有一张好看的图。', 'THE COLLECTION', '按已有款式与护理项目展示示意图，随时替换成门店实拍。', '<button data-view="members">回到会员档案</button>')}
         <div class="catalog-tools"><div class="catalog-tabs">${choices.map(([key, label]) => `<button data-product-filter="${key}" aria-pressed="${state.productFilter === key}">${label} <small>${state.products.filter((product) => key === 'all' || product.type === key).length}</small></button>`).join('')}</div><div class="catalog-search"><label for="product-search">查找产品或款式</label><input id="product-search" type="search" value="${escapeHtml(state.productSearch)}" placeholder="例如：法式、护理油"></div></div>
         <div class="catalog-status"><span>找到 ${products.length} 项 · 共 ${state.products.length} 项门店产品</span><label class="check-label"><input id="products-without-image" type="checkbox" ${state.productsWithoutImage ? 'checked' : ''}>只看无图项目</label></div>
         <div class="catalog-grid">${
@@ -35,10 +37,10 @@ export function productsPage() {
                 .slice((state.productPage - 1) * 8, state.productPage * 8)
                 .map((product) => {
                     const image = productImage(product);
-                    return `<article class="catalog-product"><div class="catalog-product-image">${productPhoto(product)}<span class="catalog-product-type">${TYPES[product.type] || '门店产品'}</span>${image?.reference ? '<span class="catalog-reference-badge">网络参考图</span>' : ''}</div><div class="catalog-product-body"><div class="catalog-product-title"><h3>${escapeHtml(product.name)}</h3><strong>${money(product.price)}</strong></div><p class="catalog-product-description">${escapeHtml(product.description || product.style)}</p><p class="catalog-product-meta">${escapeHtml(product.id)} · ${escapeHtml(product.style)}</p>${productCredit(product)}<div class="catalog-product-footer"><small>${image?.reference ? '参考图 · 可替换' : image ? '门店上传图' : '实拍待补充'}</small><button data-action="bind-product-image" data-id="${escapeHtml(product.id)}">${product.imageUrl ? '更换图片' : '上传门店图'}</button></div></div></article>`;
+                    return `<article class="catalog-product"><div class="catalog-product-image">${productPhoto(product)}<span class="catalog-product-type">${TYPES[product.type] || '门店产品'}</span>${image?.reference ? '<span class="catalog-reference-badge">网络参考图</span>' : ''}</div><div class="catalog-product-body"><div class="catalog-product-title"><h3>${escapeHtml(product.name)}</h3><strong>${product.planned ? '演示预告' : money(product.price)}</strong></div><p class="catalog-product-description">${escapeHtml(product.description || product.style)}</p><p class="catalog-product-meta">${escapeHtml(product.id)} · ${escapeHtml(product.style)}${product.planned ? ' · 计划上架 ' + product.launchDate : ''}</p>${productCredit(product)}<div class="catalog-product-footer"><small>${image?.reference ? '参考图 · 可替换' : image ? '门店上传图' : '实拍待补充'}</small><button data-action="bind-product-image" data-id="${escapeHtml(product.id)}">${product.imageUrl ? '更换图片' : '上传门店图'}</button></div></div></article>`;
                 })
                 .join('') || '<div class="empty">没有符合条件的产品，请调整筛选。</div>'
         }</div>
         <div class="catalog-pagination"><button data-action="product-prev" ${state.productPage <= 1 ? 'disabled' : ''}>上一页</button><span>${state.productPage} / ${pages}</span><button data-action="product-next" ${state.productPage >= pages ? 'disabled' : ''}>下一页</button></div>
-        ${imageUpload()}<p class="catalog-disclaimer">参考图来自你提供的 UI 附件，每张图片保留原始来源，仅用于款式沟通参考；门店上传图优先展示。产品名称与编号对应时才使用参考图，价格与在售目录始终读取现有数据库。</p>`;
+        ${imageUpload()}<p class="catalog-disclaimer">图片来自本版 UI 附件：甲片示意图仅作款式参考，带来源的网络图片保留原始链接。门店上传图优先。演示预告未上架，不作为现货销售或立即预约承诺。</p>`;
 }

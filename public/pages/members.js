@@ -2,6 +2,7 @@ import { state } from '../state.js';
 import { canContact, money, productFor } from '../rules-client.js';
 import {
     LIFECYCLE_LABELS,
+    NOTE_LABELS,
     chip,
     escapeHtml,
     head,
@@ -11,6 +12,7 @@ import {
     num,
     sourceHistory,
 } from '../components.js';
+import { enhanceFragment } from '../effects.js';
 import { api } from '../api.js';
 
 function membersPage() {
@@ -92,12 +94,33 @@ function memberProfile(member) {
                 <div class="cycle-caption"><span>距离上次到店 ${member.days} 天</span><strong>${member.ratio} 倍偏离</strong></div></section>
             <section class="detail-section detail-two"><div><h3>偏好与权益</h3><p>${escapeHtml(member.style)} / ${escapeHtml(member.secondary)}<br>储值余额是已有权益。</p></div>
                 <div><h3>联系资格</h3><p class="pill ${canContact(member) ? 'green' : 'orange'}">${canContact(member) ? '已通过联系资格检查' : '存在联系限制，请查看完整档案'}</p></div></section>
-            <section class="detail-section"><div class="section-label"><h3>老板娘备注</h3><span class="pill gray">历史记录</span></div><p>${escapeHtml(member.latestNote || '暂无历史备注。')}</p></section>
+            <section class="detail-section" id="member-notes" data-id="${member.id}">${memberNotes(member.id)}</section>
             <section class="detail-section"><h3>护理线索</h3><p>${escapeHtml(care?.tags || '可在完整档案中查看服务历史。')}</p>
                 ${care ? `<p class="muted">建议服务：${escapeHtml(care.preferredService)} · 来源计划日期 ${escapeHtml(care.followupDate)}</p>` : ''}</section>
-            <div id="member-profile-extra" data-id="${member.id}">${state.memberDetailsCache.has(member.id) ? sourceHistory(state.memberDetailsCache.get(member.id)) : '<p class="helper">正在读取历史资料…</p>'}</div>
+            <div id="member-profile-extra" data-id="${member.id}">${state.memberDetailsCache.has(member.id) ? sourceHistory(state.memberDetailsCache.get(member.id), true) : '<p class="helper">正在读取历史资料…</p>'}</div>
             <div class="button-row" style="margin-top:20px"><button class="btn" data-action="studio-member" data-id="${member.id}" ${canContact(member) ? '' : 'disabled'}>为这位会员准备话术</button>
                 <button class="btn outline" data-action="prepare-care" data-id="${member.id}" ${!canContact(member) || member.careHandled ? 'disabled' : ''}>沟通准备</button></div></section>`;
+}
+
+function memberNotes(id) {
+    const notes = state.memberDetailsCache.get(id)?.notes || [];
+    const editing = notes.find((note) => note.note_id === state.editNoteId);
+    const draft = state.noteDrafts.get(id) || {
+        text: editing?.note_text || '',
+        type: editing?.note_type || 'preference',
+        pinned: editing?.is_pinned ? 'on' : '',
+    };
+    return `<div class="profile-section-head"><h3>老板娘备注</h3><small>${notes.length} 条</small></div>${notes.map((note) => `<div class="profile-note"><div class="profile-note-meta"><span>${note.is_pinned ? '置顶 · ' : ''}${escapeHtml(NOTE_LABELS[note.note_type] || note.note_type)} · ${escapeHtml(note.author_name || '店主')}</span><button class="member-text-button" data-action="pin-note" data-id="${escapeHtml(note.note_id)}">${note.is_pinned ? '取消置顶' : '置顶'}</button><button class="member-text-button" data-action="edit-note" data-id="${escapeHtml(note.note_id)}">编辑</button></div><p>${escapeHtml(note.note_text)}</p></div>`).join('') || '<p class="helper">暂无备注，可以记下她喜欢的款式和沟通习惯。</p>'}
+    <form id="member-note-form" class="profile-note-form" data-member-id="${id}"><label for="member-note-text">${editing ? '编辑这条备注' : '补充一条备注'}</label><textarea id="member-note-text" name="text" maxlength="1200" required placeholder="例如：偏好短方圆甲，通勤时喜欢低饱和色。">${escapeHtml(draft.text)}</textarea><div class="profile-note-toolbar"><select id="note-type" name="type" aria-label="备注类型">${Object.entries(
+        NOTE_LABELS,
+    )
+        .map(
+            ([value, label]) =>
+                `<option value="${value}" ${draft.type === value ? 'selected' : ''}>${label}</option>`,
+        )
+        .join(
+            '',
+        )}</select><label class="check-label"><input type="checkbox" name="pinned" ${draft.pinned ? 'checked' : ''}>置顶</label><button class="primary" type="submit">保存备注</button>${editing ? '<button type="button" data-action="cancel-note">取消编辑</button>' : ''}</div></form>`;
 }
 
 async function loadMemberExtra(id) {
@@ -106,8 +129,17 @@ async function loadMemberExtra(id) {
     try {
         const details = await api(`/members/${id}/details`);
         state.memberDetailsCache.set(id, details);
+        const notesContainer = document.getElementById('member-notes');
+        if (notesContainer?.dataset.id === id) {
+            notesContainer.innerHTML = memberNotes(id);
+            enhanceFragment(notesContainer);
+        }
+        const studioNotes = document.getElementById('studio-notes');
+        if (studioNotes?.dataset.id === id)
+            studioNotes.innerHTML = `<ul class="wb-notes">${details.notes.map((note) => `<li><small>${note.is_pinned ? '置顶 · ' : ''}${escapeHtml(NOTE_LABELS[note.note_type] || note.note_type)}</small>${escapeHtml(note.note_text)}</li>`).join('')}</ul>`;
+
         const container = document.getElementById('member-profile-extra');
-        if (container?.dataset.id === id) container.innerHTML = sourceHistory(details);
+        if (container?.dataset.id === id) container.innerHTML = sourceHistory(details, true);
     } catch (error) {
         const container = document.getElementById('member-profile-extra');
         if (container?.dataset.id === id)

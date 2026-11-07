@@ -1,13 +1,22 @@
-import { applyState, state } from './state.js';
+import { applyState, state, resetInterfaceState } from './state.js';
 import { closeModal, escapeHtml, num, toast } from './components.js';
 import { api } from './api.js';
 import { SCENARIOS, canContact } from './rules-client.js';
-import { dashboard, setupCardTilt } from './pages/dashboard.js';
+import { dashboard } from './pages/dashboard.js';
 import { loadMemberExtra, memberModal, membersPage } from './pages/members.js';
-import { studioPage } from './pages/studio.js';
+import { studioPage, studioContext } from './pages/studio.js';
 import { campaigns, chooseScenario, taskModal } from './pages/campaigns.js';
 import { reports } from './pages/reports.js';
+import { createMessageCard } from './download-card.js';
 import { productsPage } from './pages/products.js';
+import { beforeRender, enhanceUI, closeChoices } from './effects.js';
+import {
+    OBJECTIVES,
+    noProductObjective,
+    workbenchProducts,
+    canContactFor,
+    buildOpportunityTask,
+} from './rules-client.js';
 
 async function save(path, body, onSuccess) {
     if (state.saving) return;
@@ -110,6 +119,7 @@ function flipCard(id) {
     front.inert = flipped;
     back.inert = !flipped;
     front.setAttribute('aria-hidden', String(flipped));
+    front.querySelector('[data-action="flip"]').setAttribute('aria-expanded', String(flipped));
     back.setAttribute('aria-hidden', String(!flipped));
     (flipped ? back : front).querySelector('[data-action="flip"]').focus({ preventScroll: true });
 }
@@ -121,7 +131,12 @@ function generateFor(memberId = state.studioMemberId) {
         return toast('请选择可用模型');
     return save(
         '/copy/generate',
-        { memberIds: [memberId], model: state.selectedModel, style: state.selectedCopyStyle },
+        {
+            memberIds: [memberId],
+            model: state.selectedModel,
+            style: state.selectedCopyStyle,
+            context: { objective: state.studioObjective, productId: state.studioProductId },
+        },
         ({ items, errors }) => {
             state.generationErrors = errors;
             render();
@@ -147,8 +162,10 @@ function uploadProductImage() {
     });
 }
 
-function saveCopy(id, copy = false) {
-    const message = document.getElementById('copy-message-' + id)?.value.trim();
+function saveCopy(id, copy = false, submit = false) {
+    const message = (
+        document.getElementById('copy-message-' + id) || document.getElementById('message-draft')
+    )?.value.trim();
     if (!message) return toast('请填写文案');
     return save(`/copy/${id}/save`, { message }, async () => {
         state.copyEdits.delete(String(id));
@@ -156,7 +173,9 @@ function saveCopy(id, copy = false) {
             try {
                 await navigator.clipboard.writeText(message);
             } catch {
-                const field = document.getElementById('copy-message-' + id);
+                const field =
+                    document.getElementById('copy-message-' + id) ||
+                    document.getElementById('message-draft');
                 field.disabled = false;
                 field.focus();
                 field.select();
@@ -167,12 +186,118 @@ function saveCopy(id, copy = false) {
             const response = await api(`/copy/${id}/copied`, { message });
             applyState(response.state);
         }
+        if (submit) {
+            const response = await api('/tasks/from-copy', { draftId: Number(id), message });
+            applyState(response.state);
+            state.selectedTaskId = response.taskId;
+            state.taskFilter = 'pending_review';
+            setView('campaigns');
+            toast('当前文案已提交人工审核');
+            return;
+        }
         render();
         toast(copy ? '文案已复制，可粘贴给客户' : '修改已保存');
     });
 }
 
+async function writeClipboard(message) {
+    try {
+        await navigator.clipboard.writeText(message);
+    } catch {
+        const field = document.getElementById('message-draft');
+        field.disabled = false;
+        field.focus();
+        field.select();
+        const copied = document.execCommand('copy');
+        field.disabled = true;
+        if (!copied) throw new Error('浏览器未允许复制，请手动复制已选中的文案');
+    }
+}
+function saveManual(action) {
+    const current = studioContext(),
+        message = document.getElementById('message-draft')?.value.trim();
+    if (!message || !current) return toast('请填写文案');
+    return save(
+        '/copy/manual',
+        {
+            memberId: current.member.id,
+            message,
+            context: { objective: current.objective, productId: current.product?.id || null },
+        },
+        async ({ draftId }) => {
+            state.manualDrafts.delete(current.key);
+            if (action === 'manual-copy') {
+                await writeClipboard(message);
+                const response = await api(`/copy/${draftId}/copied`, { message });
+                applyState(response.state);
+            }
+            if (action === 'manual-submit') {
+                const response = await api('/tasks/from-copy', { draftId, message });
+                applyState(response.state);
+                state.selectedTaskId = response.taskId;
+                state.taskFilter = 'pending_review';
+                setView('campaigns');
+                toast('文案已提交人工审核');
+                return;
+            }
+            render();
+            toast(action === 'manual-copy' ? '文案已复制' : '手写文案已保存');
+        },
+    );
+}
+async function downloadCard() {
+    const current = studioContext(),
+        message = document.getElementById('message-draft')?.value.trim();
+    if (!current || !message) return toast('请先准备文案');
+    try {
+        await createMessageCard(message, current.product);
+        toast('图文卡片已下载');
+    } catch (error) {
+        toast(error.message);
+    }
+}
+function saveNote(form) {
+    const values = Object.fromEntries(new FormData(form));
+    return save(
+        `/members/${form.dataset.memberId}/notes`,
+        {
+            noteId: state.editNoteId,
+            type: values.type,
+            text: values.text,
+            pinned: values.pinned === 'on',
+        },
+        ({ details }) => {
+            state.memberDetailsCache.set(form.dataset.memberId, details);
+            state.editNoteId = null;
+            state.noteDrafts.delete(form.dataset.memberId);
+            render();
+            toast('会员备注已保存');
+        },
+    );
+}
+function pinNote(id) {
+    const details = state.memberDetailsCache.get(state.profileMemberId),
+        note = details?.notes.find((note) => note.note_id === id);
+    if (!note) return;
+    return save(
+        `/members/${state.profileMemberId}/notes`,
+        {
+            noteId: id,
+            type: note.note_type,
+            text: note.note_text,
+            pinned: !note.is_pinned,
+            author: note.author_name || '店主',
+        },
+        ({ details }) => {
+            state.memberDetailsCache.set(state.profileMemberId, details);
+            render();
+            toast('备注置顶状态已更新');
+        },
+    );
+}
+
 function render() {
+    beforeRender();
     const pages = {
         dashboard: [
             '今日复购计划',
@@ -193,26 +318,24 @@ function render() {
     document.getElementById('page-index').textContent =
         `${String(Object.keys(pages).indexOf(state.view) + 1).padStart(2, '0')} / 工作空间`;
     const pending = state.tasks.filter((task) => task.status === 'pending_review').length;
-    document.querySelector('#sidebar .nav').innerHTML = Object.entries(pages)
-        .map(
-            ([key, [label]], index) =>
-                `<button data-view="${key}" class="${state.view === key ? 'active' : ''}" ${state.view === key ? 'aria-current="page"' : ''}>${String(index + 1).padStart(2, '0')}<span>${label}</span>${key === 'campaigns' && pending ? `<span id="pending-badge">${pending}</span>` : ''}</button>`,
-        )
-        .join('');
+    document.querySelectorAll('.atelier-dock [data-view]').forEach((button) => {
+        if (button.dataset.view === state.view) button.setAttribute('aria-current', 'page');
+        else button.removeAttribute('aria-current');
+    });
+    const badge = document.getElementById('pending-badge');
+    badge.textContent = pending;
+    badge.hidden = !pending;
     document.querySelectorAll('[data-member-count]').forEach((element) => {
         element.textContent = num(state.members.length);
     });
-    document.getElementById('data-origin').textContent =
-        state.dataSource.kind === 'sqlite_import'
-            ? `来源数据已导入 · ${state.products.length} 项产品`
-            : '固定生成的演示资料';
     document.getElementById('logs').innerHTML = state.logs.length
         ? state.logs
               .map((entry) => `<li>[${escapeHtml(entry.time)}] ${escapeHtml(entry.desc)}</li>`)
               .join('')
         : '<li>暂无操作记录。</li>';
-    if (state.view === 'dashboard') setupCardTilt();
+    enhanceUI();
     if (state.view === 'members') loadMemberExtra(state.profileMemberId);
+    if (state.view === 'studio') loadMemberExtra(state.studioMemberId);
 }
 
 function runAnalysis() {
@@ -222,10 +345,10 @@ function runAnalysis() {
 
 function queueGoalTasks() {
     const memberIds = Array.from(
-        document.querySelectorAll('#goal-panel input[name="candidate"]:checked'),
-        (input) => input.value,
+        document.querySelectorAll('#care-wall [data-candidate]'),
+        (card) => card.dataset.candidate,
     );
-    if (!memberIds.length) return toast('请先勾选要加入待审核的会员');
+    if (!memberIds.length) return toast('当前没有可加入的候选会员');
     return save('/tasks', { opportunity: state.selectedOpportunity, memberIds }, ({ created }) => {
         state.taskFilter = 'pending_review';
         setView('campaigns');
@@ -264,24 +387,11 @@ function execute(id) {
 function reset() {
     if (!window.confirm('重置会清空演示任务、关怀记录、AI 文案和操作日志。确定继续吗？')) return;
     return save('/reset', {}, () => {
-        state.filter = 'all';
-        state.search = '';
-        state.page = 1;
-        state.taskFilter = 'all';
-        state.selectedOpportunity = 'all';
-        state.reportGoal = 'all';
-        state.planLimit = 3;
-        state.selectedTaskId = null;
-        state.productSearch = '';
-        state.productFilter = 'all';
-        state.productPage = 1;
-        state.productsWithoutImage = false;
-        state.careDrafts.clear();
-        state.copyEdits.clear();
-        state.studioMemberId = state.members[0]?.id || null;
-        state.generationErrors = [];
+        resetInterfaceState();
         closeModal();
+        document.getElementById('demo-tools').open = false;
         render();
+        window.scrollTo(0, 0);
         toast('已重置为初始演示场景');
     });
 }
@@ -354,6 +464,7 @@ document.addEventListener('click', (event) => {
 
     switch (action) {
         case 'focus-member':
+            state.editNoteId = null;
             state.profileMemberId = id;
             return render();
         case 'retry-member':
@@ -361,6 +472,8 @@ document.addEventListener('click', (event) => {
         case 'studio-member':
             if (!state.members.some((member) => member.id === id)) return;
             state.studioMemberId = id;
+            state.studioObjective = control.dataset.objective || state.studioObjective;
+            state.studioProductId = null;
             return setView('studio');
         case 'bind-product-image':
             closeModal();
@@ -378,6 +491,33 @@ document.addEventListener('click', (event) => {
             return saveCopy(id);
         case 'copy-message':
             return saveCopy(id, true);
+        case 'submit-copy':
+            return saveCopy(id, false, true);
+        case 'manual-save':
+        case 'manual-copy':
+        case 'manual-submit':
+            return saveManual(action);
+        case 'download-card':
+            return downloadCard();
+        case 'edit-note':
+            state.editNoteId = id;
+            state.noteDrafts.delete(state.profileMemberId);
+            return render();
+        case 'cancel-note':
+            state.editNoteId = null;
+            return render();
+        case 'pin-note':
+            return pinNote(id);
+        case 'reset-interface':
+            beforeRender();
+            closeModal();
+            document.getElementById('demo-tools').open = false;
+            resetInterfaceState();
+            render();
+            window.scrollTo(0, 0);
+            toast('界面已重置，已保存记录与图片保留');
+            return;
+
         case 'menu': {
             const open = document.body.classList.toggle('menu-open');
             control.setAttribute('aria-expanded', String(open));
@@ -422,6 +562,11 @@ function rememberCareDraft(form) {
 }
 
 document.addEventListener('submit', (event) => {
+    if (event.target.id === 'member-note-form') {
+        event.preventDefault();
+        if (!state.saving) saveNote(event.target);
+        return;
+    }
     if (event.target.id !== 'care-form') return;
     event.preventDefault();
     if (!state.saving) saveCare(event.target);
@@ -431,8 +576,21 @@ document.addEventListener('change', (event) => {
     const input = event.target;
     if (input.id === 'studio-member') {
         state.studioMemberId = input.value;
+        state.studioProductId = null;
         render();
     }
+    if (input.id === 'studio-objective') {
+        state.studioObjective = input.value;
+        state.studioProductId = null;
+        render();
+    }
+    if (input.id === 'studio-product') {
+        state.studioProductId = input.value;
+        render();
+    }
+    const noteForm = input.closest('#member-note-form');
+    if (noteForm)
+        state.noteDrafts.set(noteForm.dataset.memberId, Object.fromEntries(new FormData(noteForm)));
     if (input.id === 'ai-model') state.selectedModel = input.value;
     if (input.id === 'copy-style') {
         state.selectedCopyStyle = input.value;
@@ -470,6 +628,21 @@ document.addEventListener('input', (event) => {
         const preview = document.querySelector(`[data-chat-preview="${input.dataset.copyEdit}"]`);
         if (preview) preview.textContent = input.value;
     }
+    if (input.dataset.manualCopy) {
+        state.manualDrafts.set(input.dataset.manualCopy, input.value);
+        const preview = document.querySelector('[data-chat-preview]');
+        if (preview) preview.textContent = input.value;
+    }
+    if (input.id === 'message-draft') {
+        const count = document.getElementById('draft-count');
+        if (count) count.textContent = input.value.length + ' / 1000';
+        document.querySelectorAll('[data-requires-message]').forEach((button) => {
+            button.disabled = !input.value.trim() || button.dataset.contactAllowed !== 'true';
+        });
+    }
+    const noteForm = input.closest('#member-note-form');
+    if (noteForm)
+        state.noteDrafts.set(noteForm.dataset.memberId, Object.fromEntries(new FormData(noteForm)));
     const careForm = input.closest('#care-form');
     if (careForm) rememberCareDraft(careForm);
     if (!['member-search', 'product-search'].includes(input.id)) return;
@@ -490,6 +663,7 @@ document.addEventListener('input', (event) => {
 
 document.addEventListener('keydown', (ev) => {
     if (ev.key === 'Escape') {
+        closeChoices();
         closeModal();
         document.body.classList.remove('menu-open');
         document.getElementById('menu-toggle')?.setAttribute('aria-expanded', 'false');

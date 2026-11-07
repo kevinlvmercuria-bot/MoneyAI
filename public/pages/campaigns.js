@@ -1,3 +1,4 @@
+import { productPhoto, productCredit } from '../components.js';
 import { state } from '../state.js';
 import { TASK_STATUS_LABELS, chip, escapeHtml, headModal, modal, toast } from '../components.js';
 import { DEMO_SERVICE_PRICE, SCENARIOS, canContact, money } from '../rules-client.js';
@@ -23,10 +24,11 @@ function campaigns() {
 
 function taskDetail(task) {
     const member = state.members.find((member) => member.id === task.memberId);
-    const blocked = !canContact(member);
+    const blocked = !canContact(member) && task.context?.objective !== 'scheduled';
+    const product = state.products.find((product) => product.id === task.context?.productId);
     return `<div class="detail-head"><h2>${escapeHtml(member.displayName || member.id)} · ${escapeHtml(task.strategy)}</h2>${chip(task.status)}</div><p class="helper">${task.id} / ${task.memberId}</p>
         <p class="eligibility ${blocked ? 'blocked' : ''}">${blocked ? '当前存在联系限制，请查看会员档案。服务端将在审核和执行时再次检查。' : '已通过联系资格检查 · 已授权、无投诉、无近期联系或未来预约'}</p>
-        <section class="growth-task-context"><h3>这份计划为什么给她？</h3><p>${escapeHtml(task.reason)}</p><p class="growth-note-reference"><b>会员档案参考</b>${escapeHtml(member.latestNote || `偏好${member.style} · ${member.days} 天未到店 · 平均周期 ${member.cycle} 天`)}</p><button data-member="${member.id}">查看完整会员档案</button></section>
+        <section class="growth-task-context"><h3>这份计划为什么给她？</h3><p>${escapeHtml(task.reason)}</p>${product ? `<div class="growth-task-product">${productPhoto(product)}<div><h4>${escapeHtml(product.name)}</h4><p>${escapeHtml(product.description)}</p>${productCredit(product)}</div></div>` : ''}<p class="growth-note-reference"><b>会员档案参考</b>${escapeHtml(member.latestNote || `偏好${member.style} · ${member.days} 天未到店 · 平均周期 ${member.cycle} 天`)}</p><button data-member="${member.id}">查看完整会员档案</button></section>
         <div class="form-panel"><label for="edit-message">规则生成的沟通草稿 · 可修改后审核</label><textarea id="edit-message" maxlength="1000" ${task.status !== 'pending_review' ? 'readonly' : ''}>${escapeHtml(task.editedMessage || task.message)}</textarea><p class="helper">请核对事实与语气，不编造优惠或预约时段。审核通过后，仍需选择模拟情景才会记录结果。</p><div class="button-row">${task.status === 'pending_review' ? `<button class="primary" data-action="approve" data-id="${task.id}">审核通过</button><button data-action="reject" data-id="${task.id}">拒绝任务</button>` : task.status === 'approved' ? `<button class="primary" data-execute="${task.id}">执行模拟触达</button>` : ''}</div></div>
         ${task.result ? `<p class="eligibility">模拟结果：回复 ${task.result.reply ? '是' : '否'} / 预约 ${task.result.booking ? '是' : '否'} / 到店 ${task.result.visit ? '是' : '否'} / 消费 ${money(task.result.spending)}。未发送真实消息。</p>` : ''}`;
 }

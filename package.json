@@ -1,6 +1,6 @@
 {
   "name": "nailmate",
-  "version": "3.2.0",
+  "version": "4.0.0",
   "private": true,
   "description": "NailMate Express API and SQL Server integration scaffold",
   "engines": {
@@ -10,7 +10,7 @@
     "start": "node server/main.js",
     "dev": "node --watch server/main.js",
     "db:init": "node database/setup.js",
-    "test": "node --test server/workflow.test.js",
+    "test": "node --test server/workflow.test.js server/relationship.test.js",
     "check": "node scripts/check.js",
     "test:legacy": "node --test server/app.test.js",
     "db:import": "node database/import-source.js"

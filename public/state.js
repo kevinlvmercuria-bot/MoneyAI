@@ -1,3 +1,35 @@
+function initialUI() {
+    return {
+        saving: false,
+        selectedModel: '',
+        selectedCopyStyle: 'friendly',
+        studioMemberId: 'M0001',
+        studioObjective: 'wake',
+        studioProductId: null,
+        copyEdits: new Map(),
+        manualDrafts: new Map(),
+        generationErrors: [],
+        careDrafts: new Map(),
+        noteDrafts: new Map(),
+        editNoteId: null,
+        view: 'dashboard',
+        filter: 'all',
+        search: '',
+        page: 1,
+        taskFilter: 'all',
+        profileMemberId: 'M0001',
+        memberDetailsCache: new Map(),
+        memberDetailsLoading: new Set(),
+        selectedOpportunity: 'all',
+        reportGoal: 'all',
+        planLimit: 3,
+        productSearch: '',
+        productFilter: 'all',
+        productsWithoutImage: false,
+        productPage: 1,
+        selectedTaskId: null,
+    };
+}
 export const state = {
     members: [],
     tasks: [],
@@ -5,32 +37,17 @@ export const state = {
     careRecords: [],
     products: [],
     dataSource: {},
-    careDrafts: new Map(),
-    saving: false,
     copyDrafts: [],
     aiConfig: { models: [], configured: false },
-    selectedModel: '',
-    selectedCopyStyle: 'friendly',
-    studioMemberId: 'M0001',
-    copyEdits: new Map(),
-    generationErrors: [],
-    view: 'dashboard',
-    filter: 'all',
-    search: '',
-    page: 1,
-    taskFilter: 'all',
-    profileMemberId: 'M0001',
-    memberDetailsCache: new Map(),
-    memberDetailsLoading: new Set(),
-    selectedOpportunity: 'all',
-    reportGoal: 'all',
-    planLimit: 3,
-    productSearch: '',
-    productFilter: 'all',
-    productsWithoutImage: false,
-    productPage: 1,
-    selectedTaskId: null,
+    ...initialUI(),
 };
+export function resetInterfaceState() {
+    Object.assign(state, initialUI());
+    state.studioMemberId = state.members[0]?.id || null;
+    state.profileMemberId = state.members[0]?.id || null;
+    state.selectedModel = state.aiConfig.defaultModel || '';
+    state.selectedCopyStyle = state.aiConfig.defaultStyle || 'friendly';
+}
 
 function applyState(snapshot) {
     const previousSource = state.dataSource.sourceHash;

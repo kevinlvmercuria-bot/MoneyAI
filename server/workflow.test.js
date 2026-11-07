@@ -238,7 +238,8 @@ test('SQL Server 最小业务闭环验收', { timeout: 90000 }, async (t) => {
             assert.deepEqual(current.tasks, existing.tasks);
             assert.deepEqual(current.careRecords, existing.careRecords);
             assert.deepEqual(current.logs, existing.logs);
-            assert.equal(current.products.length, 24);
+            assert.equal(current.products.filter(product=>!product.planned).length,24);
+            assert.ok(current.products.some(product=>product.planned&&product.id==='IDEA-SEA-SALT'));
             assert.equal(current.dataSource.kind, 'sqlite_import');
             const expected = mapMembers(readSource().rows).find((member) => member.id === 'M0001');
             const actual = current.members.find((member) => member.id === 'M0001');
@@ -275,13 +276,14 @@ test('SQL Server 最小业务闭环验收', { timeout: 90000 }, async (t) => {
             assert.ok(task.reason.includes(product.name));
         });
 
-        await t.test('五类经营机会按实际资格筛选，支持整批入队且不改旧目标契约', async () => {
+        await t.test('关系经营机会按订单和偏好筛选，空计划无候选，兼容旧目标契约', async () => {
             for (const opportunity of Object.keys(OPPORTUNITIES)) {
                 const current = await state();
-                const candidates = opportunityCandidates(current.members, current.tasks, opportunity);
-                assert.ok(candidates.length > 0);
-                assert.ok(candidates.every((member) => canContact(member) && matchesOpportunity(member, opportunity)));
-                if (opportunity === 'care') assert.ok(candidates.every((member) => member.careProfile.optIn));
+                const candidates = opportunityCandidates(current.members, current.tasks, opportunity, current.products);
+                if(opportunity==='scheduled'){assert.equal(candidates.length,0);continue;}
+                assert.ok(candidates.length>0);
+                assert.ok(candidates.every(member=>canContact(member)&&matchesOpportunity(member,opportunity,current.products)));
+                if (opportunity === 'care') assert.ok(candidates.every(member=>member.careProfile.optIn&&member.recentNailVisit.days>=1&&member.recentNailVisit.days<=7));
                 const response = await post('/tasks', { opportunity, memberIds: candidates.slice(0, 2).map((member) => member.id) });
                 assert.equal(response.status, 200);
                 const result = await response.json();

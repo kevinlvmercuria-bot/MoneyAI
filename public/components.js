@@ -2,6 +2,13 @@ import { money } from './rules-client.js';
 import { productImage } from './product-images.js';
 
 let toastTimer;
+const NOTE_LABELS = {
+    preference: '款式偏好',
+    communication: '沟通习惯',
+    service: '服务细节',
+    care: '护理需求',
+    appointment: '预约习惯',
+};
 
 const LIFECYCLE_LABELS = {
         active: '活跃',
@@ -75,14 +82,14 @@ function planProgress(tasks) {
 
 function productPhoto(product) {
     const image = productImage(product);
-    return `<div class="wb-product-photo">${image ? `<img src="${escapeHtml(image.url)}" alt="${escapeHtml(product.name)}${image.reference ? ' · 网络参考图' : ' · 门店上传图'}" loading="lazy">` : '<span>产品实拍<br>待上传</span>'}</div>`;
+    return `<div class="wb-product-photo${image?.kind === 'generated_nail_swatch' ? ' swatch-photo' : ''}">${image ? `<img src="${escapeHtml(image.url)}" alt="${escapeHtml(product.name)}${image.kind === 'generated_nail_swatch' ? ' · AI 甲片示意图' : image.reference ? ' · 网络参考图' : ' · 门店上传图'}" loading="lazy">` : '<span>产品实拍<br>待上传</span>'}</div>`;
 }
 
 function productCredit(product) {
     const image = productImage(product);
     return image?.reference
         ? `<a class="catalog-photo-credit" href="${escapeHtml(image.sourceUrl)}" target="_blank" rel="noopener noreferrer">网络参考图来源 · ${escapeHtml(new URL(image.sourceUrl).hostname.replace(/^www\./, ''))} ↗</a>`
-        : `<span class="helper">${image ? '门店上传图' : '产品实拍待上传'}</span>`;
+        : `<span class="helper">${image?.kind === 'generated_nail_swatch' ? 'AI 甲片示意图 · 款式参考' : image ? '门店上传图' : '产品实拍待上传'}</span>`;
 }
 
 function metric(label, value, meta) {
@@ -102,7 +109,7 @@ function headModal(kicker, title) {
     return `<div class="modal-head"><div><p class="kicker">${kicker}</p><h2>${title}</h2></div><button class="modal-close" data-action="close" aria-label="关闭">×</button></div>`;
 }
 
-function sourceHistory(details) {
+function sourceHistory(details, hideNotes = false) {
     const sections = [
         [
             '最近消费记录',
@@ -129,6 +136,7 @@ function sourceHistory(details) {
         ],
     ];
     let html = sections
+        .filter(([title]) => !hideNotes || title !== '会员备注')
         .map(
             ([title, rows]) => `<details><summary>${title} · 最近 ${rows.length} 条</summary>
             ${rows.length ? `<ul class="source-history">${rows.map((cells) => `<li>${cells.map(escapeHtml).join(' · ')}</li>`).join('')}</ul>` : '<p class="helper">暂无来源记录。</p>'}</details>`,
@@ -160,6 +168,7 @@ export {
     sourceHistory,
     LIFECYCLE_LABELS,
     TASK_STATUS_LABELS,
+    NOTE_LABELS,
     planProgress,
     productPhoto,
     productCredit,
