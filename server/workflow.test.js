@@ -56,6 +56,8 @@ test('SQL Server 最小业务闭环验收', { timeout: 90000 }, async (t) => {
             assert.equal(current.tasks.length, 1);
             const html = await (await fetch(base)).text();
             assert.match(html, /workspace.js/);
+            assert.match(html, /type="module"\s+src="workspace.js"/);
+            assert.equal(require('./index').start, require('./main').start);
         });
 
         await t.test('三类目标话术、筛选和授权拦截', async () => {

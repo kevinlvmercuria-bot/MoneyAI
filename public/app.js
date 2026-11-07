@@ -1,3 +1,4 @@
+// 历史 mock 前端资产，由旧版契约测试保留；当前页面加载 workspace.js。
 (() => {
     'use strict';
     const { GOALS, SCENARIOS, DEMO_SERVICE_PRICE, money, canContact, priorityScore, productFor, goalReason, goalCandidates } = NailMateRules;

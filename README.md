@@ -11,6 +11,8 @@
 3. 执行 `npm run db:init`，再执行 `npm start`。
 4. 打开 [http://127.0.0.1:3000](http://127.0.0.1:3000)。也可用 `GET /api/state` 检查数据库是否已经接通。
 
+正式启动统一使用 `npm start`，开发监听使用 `npm run dev`，两者都进入 `server/main.js`。`server/index.js` 仅兼容旧命令并转发到同一入口。前端通过该 HTTP 服务加载原生 JavaScript 模块。
+
 ```powershell
 npm ci
 Copy-Item .env.example .env
@@ -28,11 +30,20 @@ npm start
 
 | 位置 | 接手内容 |
 | --- | --- |
-| `public/index.html`、`public/styles.css`、`public/workspace.js` | 前端维护增强版工作台结构、主题样式、交互和 API 调用 |
+| `public/index.html`、`public/workspace.js` | 页面骨架与唯一前端入口；初始化、导航、事件和异步协调 |
+| `public/pages/` | 六个页面的渲染与对应详情展示 |
+| `public/api.js`、`public/state.js`、`public/components.js` | HTTP 请求、单一共享状态、公共展示组件 |
+| `public/styles.css`、`public/styles/` | 样式入口；基础主题与业务组件适配按原有顺序加载 |
 | `public/rules.js` | 前后端共用选人、匹配和话术规则，后端在写入前重新验证 |
 | `server/main.js`、`server/store.js`、`server/db.js` | 后端维护路由、事务、状态流转及 SQL 连接 |
 | `database/schema.sql`、`database/setup.js`、`database/demo-data.js` | 数据库同学维护表、固定演示数据和初始化 |
 | [docs/api.md](docs/api.md) | 联调契约 |
+
+页面文件分别为 `dashboard.js`、`members.js`、`care.js`、`studio.js`、`campaigns.js` 和 `reports.js`。修改页面布局先从对应文件阅读；操作事件和提交协调在 `workspace.js`，请求格式集中在 `api.js`。页面模块只依赖状态、公共组件、请求工具和规则，不反向依赖入口。
+
+`rules.js` 保持后端的 CommonJS 导出，`rules-client.js` 负责浏览器兼容桥接，复用同一份规则。可变的会员、筛选、勾选和草稿状态都由 `state.js` 持有。
+
+已核查的历史实现继续保留。`server/app.js`、`server/members.js` 和 `server/config.js` 用于旧版联调契约，`public/app.js` 仍被旧测试请求；它们不是正式服务的调用链。`database/init.js` 和 `001-schema.sql` 是旧 `wg_member` 初始化流程，正式命令使用 `database/setup.js`。旧测试通过 `npm run test:legacy` 单独运行。
 
 ## 联调顺序
 

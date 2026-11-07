@@ -191,4 +191,4 @@ if (require.main === module) {
     });
 }
 
-module.exports = { createApp };
+module.exports = { createApp, start };

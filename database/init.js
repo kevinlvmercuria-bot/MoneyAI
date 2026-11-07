@@ -1,4 +1,5 @@
 'use strict';
+// 历史 wg_member 初始化脚本。正式初始化命令使用 database/setup.js。
 const fs = require('node:fs/promises');
 const path = require('node:path');
 const sql = require('mssql');

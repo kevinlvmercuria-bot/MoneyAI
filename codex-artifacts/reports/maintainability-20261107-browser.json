@@ -1,0 +1,99 @@
+{
+  "visual": [
+    {
+      "viewport": "desktop",
+      "page": "dashboard",
+      "identical": true,
+      "pixels": 2,
+      "maxDifference": 1
+    },
+    {
+      "viewport": "desktop",
+      "page": "members",
+      "identical": true,
+      "pixels": 0,
+      "maxDifference": 0
+    },
+    {
+      "viewport": "desktop",
+      "page": "care",
+      "identical": true,
+      "pixels": 0,
+      "maxDifference": 0
+    },
+    {
+      "viewport": "desktop",
+      "page": "studio",
+      "identical": true,
+      "pixels": 0,
+      "maxDifference": 0
+    },
+    {
+      "viewport": "desktop",
+      "page": "campaigns",
+      "identical": true,
+      "pixels": 0,
+      "maxDifference": 0
+    },
+    {
+      "viewport": "desktop",
+      "page": "reports",
+      "identical": true,
+      "pixels": 0,
+      "maxDifference": 0
+    },
+    {
+      "viewport": "mobile",
+      "page": "dashboard",
+      "identical": true,
+      "pixels": 0,
+      "maxDifference": 0
+    },
+    {
+      "viewport": "mobile",
+      "page": "members",
+      "identical": true,
+      "pixels": 0,
+      "maxDifference": 0
+    },
+    {
+      "viewport": "mobile",
+      "page": "care",
+      "identical": true,
+      "pixels": 0,
+      "maxDifference": 0
+    },
+    {
+      "viewport": "mobile",
+      "page": "studio",
+      "identical": true,
+      "pixels": 0,
+      "maxDifference": 0
+    },
+    {
+      "viewport": "mobile",
+      "page": "campaigns",
+      "identical": true,
+      "pixels": 0,
+      "maxDifference": 0
+    },
+    {
+      "viewport": "mobile",
+      "page": "reports",
+      "identical": true,
+      "pixels": 0,
+      "maxDifference": 0
+    }
+  ],
+  "workflow": [
+    "cross-page selection",
+    "controlled AI generation",
+    "edit/live preview/clipboard",
+    "product binding/download",
+    "review/simulated execution",
+    "care/followup",
+    "reports",
+    "reload persistence"
+  ],
+  "errors": []
+}

@@ -1,4 +1,5 @@
 'use strict';
+// 历史联调实现，由 app.test.js 使用；正式服务入口为 main.js。
 const express = require('express');
 const path = require('node:path');
 const { randomUUID } = require('node:crypto');

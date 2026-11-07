@@ -106,3 +106,4 @@ const NailMateRules = (() => {
 })();
 
 if (typeof module !== 'undefined') module.exports = NailMateRules;
+else globalThis.NailMateRules = NailMateRules;
