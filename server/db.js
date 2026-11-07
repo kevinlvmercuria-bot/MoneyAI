@@ -30,8 +30,8 @@ if (windowsAuth) {
 }
 if (!instance && process.env.DB_PORT) config.port = Number(process.env.DB_PORT);
 
-function connect() {
-    return new sql.ConnectionPool(config).connect();
+function connect(database = config.database) {
+    return new sql.ConnectionPool({ ...config, database }).connect();
 }
 
 async function transaction(pool, work, lockMode = 'Exclusive') {

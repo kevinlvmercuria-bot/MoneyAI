@@ -30,7 +30,9 @@
         };
         const response = await fetch('/api' + path, options);
         const payload = await response.json();
-        if (!response.ok) throw new Error(payload.error || '请求失败');
+        if (!response.ok) {
+            throw Object.assign(new Error(payload.error || '请求失败'), { status: response.status });
+        }
         return payload;
     }
 
@@ -41,14 +43,30 @@
     async function save(path, body, onSuccess) {
         if (saving) return;
         saving = true;
+        const buttons = Array.from(document.querySelectorAll('button:not(:disabled)'));
+        buttons.forEach((button) => { button.disabled = true; });
+        document.getElementById('app').setAttribute('aria-busy', 'true');
+        toast('正在保存，请稍候…');
         try {
             const response = await api(path, body);
             applyState(response.state);
             onSuccess(response);
         } catch (error) {
+            if (error.status === 409) {
+                try {
+                    applyState(await api('/state'));
+                    closeModal();
+                    render();
+                } catch {
+                    toast('同步失败，请检查服务连接后刷新页面');
+                    return;
+                }
+            }
             toast(error.message || '连接服务器失败');
         } finally {
             saving = false;
+            buttons.forEach((button) => { if (button.isConnected) button.disabled = false; });
+            document.getElementById('app').removeAttribute('aria-busy');
         }
     }
 

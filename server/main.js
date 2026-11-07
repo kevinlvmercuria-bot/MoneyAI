@@ -116,6 +116,13 @@ function createApp(pool) {
 async function start() {
     const pool = await connect();
     pool.on('error', (error) => console.error('数据库连接池错误：', error.message));
+    try {
+        const state = await transaction(pool, store.state, 'Shared');
+        if (!state.members.length) throw new Error('会员数据为空，请先运行 npm run db:init');
+    } catch (error) {
+        await pool.close();
+        throw new Error('数据库尚未就绪，请检查连接并运行 npm run db:init。' + error.message);
+    }
     const server = createApp(pool).listen(Number(process.env.APP_PORT || 3000), '127.0.0.1', () => {
         console.log(`NailMate 已启动 http://127.0.0.1:${server.address().port}`);
     });
@@ -124,6 +131,13 @@ async function start() {
         await pool.close();
         process.exitCode = 1;
     });
+    for (const signal of ['SIGINT', 'SIGTERM']) {
+        process.once(signal, () => {
+            server.close(async () => {
+                await pool.close();
+            });
+        });
+    }
 }
 
 if (require.main === module) {
