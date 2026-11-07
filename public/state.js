@@ -2,7 +2,8 @@ function initialUI() {
     return {
         saving: false,
         selectedModel: '',
-        selectedCopyStyle: 'friendly',
+        selectedCopyStyle: 'auto',
+        copyStyleMemberId: null,
         studioMemberId: 'M0001',
         studioObjective: 'wake',
         studioProductId: null,
@@ -46,7 +47,7 @@ export function resetInterfaceState() {
     state.studioMemberId = state.members[0]?.id || null;
     state.profileMemberId = state.members[0]?.id || null;
     state.selectedModel = state.aiConfig.defaultModel || '';
-    state.selectedCopyStyle = state.aiConfig.defaultStyle || 'friendly';
+    state.selectedCopyStyle = state.aiConfig.defaultStyle || 'auto';
 }
 
 function applyState(snapshot) {
@@ -65,7 +66,7 @@ function applyState(snapshot) {
     if (!state.aiConfig.models.some((model) => model.id === state.selectedModel))
         state.selectedModel = state.aiConfig.defaultModel || '';
     if (!state.aiConfig.styles?.some((style) => style.id === state.selectedCopyStyle))
-        state.selectedCopyStyle = state.aiConfig.defaultStyle || 'friendly';
+        state.selectedCopyStyle = state.aiConfig.defaultStyle || 'auto';
 }
 
 export { applyState };

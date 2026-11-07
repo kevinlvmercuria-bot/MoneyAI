@@ -10,10 +10,11 @@
     "start": "node server/main.js",
     "dev": "node --watch server/main.js",
     "db:init": "node database/setup.js",
-    "test": "node --test server/workflow.test.js server/relationship.test.js",
+    "test": "node --test server/workflow.test.js server/relationship.test.js server/communication.test.js database/personality-notes.test.js",
     "check": "node scripts/check.js",
     "test:legacy": "node --test server/app.test.js",
-    "db:import": "node database/import-source.js"
+    "db:import": "node database/import-source.js",
+    "db:personality-notes": "node database/personality-notes.js"
   },
   "dependencies": {
     "dotenv": "18.0.9",

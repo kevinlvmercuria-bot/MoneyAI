@@ -1,7 +1,65 @@
 import { state } from '../state.js';
-import { GOALS, money } from '../rules-client.js';
+import { money } from '../rules-client.js';
 import { escapeHtml, num, planProgress } from '../components.js';
 import { careHistory } from './care.js';
+
+let chartObserver = null;
+
+function resultChart(stages) {
+    const maximum = Math.max(1, ...stages.map(([, count]) => count));
+    const roughStep = Math.max(1, maximum / 4);
+    const magnitude = 10 ** Math.floor(Math.log10(roughStep));
+    const step = [1, 2, 5, 10].map((value) => value * magnitude).find((value) => value >= roughStep);
+    const axisMaximum = Math.ceil(maximum / step) * step;
+    const ticks = Array.from({ length: axisMaximum / step + 1 }, (_, index) => index * step);
+    const description = stages.map(([label, count]) => `${label} ${num(count)} 条`).join('，');
+    const hasResults = stages[0][1] > 0;
+    return `<section class="report-chart" aria-labelledby="report-chart-title" data-has-results="${hasResults}">
+        <header class="report-chart-heading"><div><span class="report-chart-kicker">模拟任务进展</span><h3 id="report-chart-title">从一次问候，到再次到店</h3></div><button type="button" class="report-chart-replay" data-action="replay-report-chart" ${hasResults ? '' : 'disabled'} aria-label="重播柱状图动效">↻ 重播动效</button></header>
+        <figure class="report-chart-figure" role="img" aria-label="${escapeHtml(description)}。按任务数统计，各阶段为累计进展，不相加。">
+            <div class="report-chart-unit" aria-hidden="true">任务数（条）</div>
+            <div class="report-chart-canvas" aria-hidden="true">
+                <div class="report-chart-axis">${ticks.map((tick) => `<span style="bottom:${(tick / axisMaximum) * 100}%">${num(tick)}</span>`).join('')}</div>
+                <div class="report-chart-plot"><div class="report-chart-grid">${ticks.map((tick) => `<span style="bottom:${(tick / axisMaximum) * 100}%"></span>`).join('')}</div>
+                    <div class="report-chart-columns">${stages.map(([label, count], index) => `<div class="report-chart-column"><div class="report-chart-bar" data-value="${count}" style="--bar-height:${((count / axisMaximum) * 100).toFixed(4)}%;--bar-index:${index}"><span class="report-chart-value">${num(count)}</span></div></div>`).join('')}</div>
+                </div>
+            </div>
+            <div class="report-chart-labels" aria-hidden="true">${stages.map(([label]) => `<span>${label}</span>`).join('')}</div>
+        </figure>
+        <p class="report-chart-caption">${hasResults ? '按任务数统计，各阶段为累计进展，不相加。' : '暂无模拟执行记录，完成模拟触达后显示进展。'}</p>
+    </section>`;
+}
+
+export function cleanupReportChart() {
+    chartObserver?.disconnect();
+    chartObserver = null;
+}
+
+export function replayReportChart() {
+    const chart = document.querySelector('.report-chart');
+    if (!chart || chart.dataset.hasResults !== 'true' || matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+    chart.classList.remove('is-animating');
+    // 重播时重新开始四根柱子的单次动画，不改变数值或业务状态。
+    void chart.offsetWidth;
+    chart.classList.add('is-animating');
+}
+
+export function mountReportChart() {
+    cleanupReportChart();
+    const chart = document.querySelector('.report-chart');
+    if (!chart) return;
+    const reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
+    chart.querySelector('.report-chart-replay').disabled = reduced || chart.dataset.hasResults !== 'true';
+    if (reduced || chart.dataset.hasResults !== 'true') return;
+    if (typeof IntersectionObserver === 'undefined') return replayReportChart();
+    chartObserver = new IntersectionObserver((entries) => {
+        if (entries.some((entry) => entry.isIntersecting)) {
+            cleanupReportChart();
+            replayReportChart();
+        }
+    }, { threshold: 0.2 });
+    chartObserver.observe(chart);
+}
 
 function reports() {
     const scoped = state.tasks;
@@ -14,7 +72,7 @@ function reports() {
     ];
     const amount = sent.reduce((sum, task) => sum + task.result.spending, 0);
     return `<div class="growth-result-heading"><h2>问候之后，有没有再回来？</h2><p>只统计已人工批准并模拟执行的任务。模拟结果不是实际转化，也不能证明营销带来了增量。</p></div>${planProgress(state.tasks)}
-        <div class="growth-result-funnel">${stages.map(([label, n], i) => `<div class="rep-stat"><span>${label}</span><b>${num(n)}</b><small>${i ? '顾客反应 · 模拟情景' : '已人工批准并模拟执行'}</small></div>`).join('')}</div><section class="growth-consumption"><div class="rep-stat"><span>模拟到店消费</span><b>${money(amount)}</b></div><p>只有「已到店并消费」情景计入模拟消费。储值余额本身不计为收入；未设置对照组，不展示未经验证的增量。</p></section>
+        <div class="growth-result-funnel">${stages.map(([label, n], i) => `<div class="rep-stat"><span>${label}</span><b>${num(n)}</b><small>${i ? '顾客反应 · 模拟情景' : '已人工批准并模拟执行'}</small></div>`).join('')}</div>${resultChart(stages)}<section class="growth-consumption"><div class="rep-stat"><span>模拟到店消费</span><b>${money(amount)}</b></div><p>只有「已到店并消费」情景计入模拟消费。储值余额本身不计为收入；未设置对照组，不展示未经验证的增量。</p></section>
         <section class="section-spacer"><h3 class="growth-member-results">每位会员，跟到下一步</h3>${
             sent.length
                 ? `<div class="table-wrap"><table><thead><tr><th>会员</th><th>沟通目标</th><th>模拟进展</th><th>模拟消费</th><th>下一步</th></tr></thead><tbody>${sent

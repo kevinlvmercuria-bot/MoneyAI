@@ -115,6 +115,8 @@ function setupChoiceFields(root) {
         trigger.setAttribute('aria-haspopup', 'listbox');
         trigger.setAttribute('aria-controls', 'choice-options');
         trigger.setAttribute('aria-expanded', 'false');
+        if (select.hasAttribute('aria-describedby'))
+            trigger.setAttribute('aria-describedby', select.getAttribute('aria-describedby'));
         trigger.innerHTML =
             '<span class="choice-trigger-value"></span><span class="choice-chevron" aria-hidden="true"></span>';
         function syncTrigger() {

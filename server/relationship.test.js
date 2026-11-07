@@ -8,6 +8,7 @@ const { createApp } = require('./main');
 const { initialize } = require('../database/setup');
 const { importSource } = require('../database/import-source');
 const rules = require('../public/rules');
+const { resolveCommunication } = require('../public/communication');
 
 test('关系经营版 API 与持久化验收', { timeout: 90000 }, async (t) => {
     const name = 'NailMate_Relationship_' + randomBytes(8).toString('hex'),
@@ -16,6 +17,7 @@ test('关系经营版 API 与持久化验收', { timeout: 90000 }, async (t) => 
         server,
         created = false,
         calls = 0;
+    const generationStyles = [];
     try {
         await master.request().query(`CREATE DATABASE [${name}]`);
         created = true;
@@ -23,8 +25,9 @@ test('关系经营版 API 与持久化验收', { timeout: 90000 }, async (t) => 
         await initialize(pool);
         await importSource(pool);
         server = createApp(pool, {
-            generateCopy: async ({ member, context, products }) => {
+            generateCopy: async ({ member, context, products, style }) => {
                 calls++;
+                generationStyles.push({ member: member.id, style });
                 return {
                     message: '你好，想先问问你的近况，需要的话随时和我们聊聊。',
                     reason: '依据当前沟通目的与已有资料，先询问本人意愿。',
@@ -299,6 +302,35 @@ test('关系经营版 API 与持久化验收', { timeout: 90000 }, async (t) => 
             );
         });
 
+        await t.test('性格自动匹配与临时语气传到生成器，草稿及审核任务保留语气快照', async () => {
+            const state = await snapshot();
+            const member = free(state).find((member) => rules.matchesOpportunity(member, 'greeting', state.products));
+            assert.ok(member);
+            for (const choice of ['auto', 'direct']) {
+                const response = await post('/copy/generate', {
+                    memberIds: [member.id], model: state.ai.defaultModel, style: choice,
+                    context: { objective: 'greeting', productId: null },
+                });
+                assert.equal(response.status, 200);
+                const result = await response.json();
+                assert.equal(result.items.length, 1);
+                const draft = result.state.copyDrafts.find((draft) => draft.id === result.items[0].id);
+                assert.equal(generationStyles.at(-1).style, resolveCommunication(member, choice).id);
+                assert.equal(draft.context.styleChoice, choice);
+                assert.equal(draft.context.style, resolveCommunication(member, choice).id);
+                assert.equal(draft.context.personalitySnapshot, member.personality);
+                assert.equal(result.state.members.find((item) => item.id === member.id).personality, member.personality);
+                if (choice === 'direct') {
+                    const submitted = await post('/tasks/from-copy', { draftId: draft.id });
+                    assert.equal(submitted.status, 200);
+                    const body = await submitted.json();
+                    const task = body.state.tasks.find((task) => task.id === body.taskId);
+                    assert.equal(task.context.styleChoice, 'direct');
+                    assert.equal(task.context.style, 'direct');
+                    assert.equal(task.context.personalitySnapshot, member.personality);
+                }
+            }
+        });
         await t.test('会员备注可新增编辑置顶，覆盖层保留原始来源资料', async () => {
             const memberId = 'M0001';
             let response = await post('/members/' + memberId + '/notes', {

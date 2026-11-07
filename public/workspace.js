@@ -6,7 +6,7 @@ import { dashboard } from './pages/dashboard.js';
 import { loadMemberExtra, memberModal, membersPage } from './pages/members.js';
 import { studioPage, studioContext } from './pages/studio.js';
 import { campaigns, chooseScenario, taskModal } from './pages/campaigns.js';
-import { reports } from './pages/reports.js';
+import { reports, mountReportChart, cleanupReportChart, replayReportChart } from './pages/reports.js';
 import { createMessageCard } from './download-card.js';
 import { productsPage } from './pages/products.js';
 import { beforeRender, enhanceUI, closeChoices } from './effects.js';
@@ -298,6 +298,7 @@ function pinNote(id) {
 
 function render() {
     beforeRender();
+    cleanupReportChart();
     const pages = {
         dashboard: [
             '今日复购计划',
@@ -334,6 +335,7 @@ function render() {
               .join('')
         : '<li>暂无操作记录。</li>';
     enhanceUI();
+    if (state.view === 'reports') mountReportChart();
     if (state.view === 'members') loadMemberExtra(state.profileMemberId);
     if (state.view === 'studio') loadMemberExtra(state.studioMemberId);
 }
@@ -463,12 +465,24 @@ document.addEventListener('click', (event) => {
     }
 
     switch (action) {
+        case 'replay-report-chart':
+            return replayReportChart();
         case 'focus-member':
             state.editNoteId = null;
             state.profileMemberId = id;
             return render();
         case 'retry-member':
             return loadMemberExtra(id);
+        case 'studio-task': {
+            const task = state.tasks.find((task) => task.id === id);
+            const member = state.members.find((member) => member.id === task?.memberId);
+            if (!member) return;
+            state.studioMemberId = member.id;
+            state.studioObjective = task.context?.objective ||
+                (Object.hasOwn(OBJECTIVES, task.goal) ? task.goal : member.lifecycle === 'dormant' ? 'wake' : 'repurchase');
+            state.studioProductId = task.context?.productId || null;
+            return setView('studio');
+        }
         case 'studio-member':
             if (!state.members.some((member) => member.id === id)) return;
             state.studioMemberId = id;
@@ -594,7 +608,9 @@ document.addEventListener('change', (event) => {
     if (input.id === 'ai-model') state.selectedModel = input.value;
     if (input.id === 'copy-style') {
         state.selectedCopyStyle = input.value;
-        toast('文案风格已选择，点击生成按钮后生效');
+        render();
+        (document.getElementById('copy-style-picker') || document.getElementById('copy-style')).focus({ preventScroll: true });
+        toast('本次沟通语气已调整，生成新话术后生效');
     }
     if (input.id === 'plan-limit') {
         state.planLimit = Number(input.value);

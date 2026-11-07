@@ -4,6 +4,7 @@ const express = require('express');
 const { sql, transaction } = require('./db');
 const store = require('./store');
 const ai = require('./ai-copy');
+const { isCopyStyle, resolveCommunication } = require('../public/communication');
 const { resolveContext, generationCatalog } = require('./copy-context');
 const { noProductObjective, canContactFor } = require('../public/rules');
 const { canContact } = require('../public/rules');
@@ -92,9 +93,9 @@ function registerCopyRoutes(app, pool, generate = ai.generateCopy) {
             '请选择可用模型',
         );
         check(
-            ai.metadata().styles.some((item) => item.id === style),
+            isCopyStyle(style),
             400,
-            '请选择可用的文案风格',
+            '请选择可用的沟通语气',
         );
         check(!generating, 409, '已有一批文案正在生成，请稍后重试');
         generating = true;
@@ -127,11 +128,12 @@ function registerCopyRoutes(app, pool, generate = ai.generateCopy) {
             for (const member of selected) {
                 try {
                     const resolved = contexts.get(member.id);
+                    const communication = resolveCommunication(member, style);
                     const generated = await generate({
                         member,
                         products: initial.products,
                         model,
-                        style,
+                        style: communication.id,
                         context: resolved,
                     });
                     const result = ai.parseResult(
@@ -185,7 +187,7 @@ function registerCopyRoutes(app, pool, generate = ai.generateCopy) {
                             .input(
                                 'context',
                                 sql.NVarChar(sql.MAX),
-                                resolved ? JSON.stringify({ ...resolved, style }) : null,
+                                resolved ? JSON.stringify({ ...resolved, style: communication.id, styleChoice: style, personalitySnapshot: communication.personality }) : null,
                             )
                             .query(`INSERT dbo.CopyDrafts (member_id, model, message, original_message, reason, product_ids, context_json)
                                 OUTPUT INSERTED.id VALUES (@member, @model, @message, @message, @reason, @ids, @context)`);

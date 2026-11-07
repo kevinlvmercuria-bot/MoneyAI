@@ -595,6 +595,164 @@ input[type='radio'] {
     font-size: 29px;
     color: var(--plum);
 }
+.report-chart {
+    margin-top: 22px;
+    padding: 26px 28px 20px;
+    border: 1px solid var(--line);
+    border-radius: 15px;
+    background: linear-gradient(145deg, var(--card), var(--paper));
+}
+.report-chart-heading {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 16px;
+}
+.report-chart-kicker {
+    color: var(--muted);
+    font-size: 12px;
+    letter-spacing: 0.08em;
+}
+.report-chart-heading h3 {
+    margin: 5px 0 0;
+    color: var(--wine);
+    font-size: 21px;
+}
+.report-chart-replay {
+    flex-shrink: 0;
+    background: transparent;
+    font-size: 12px;
+    min-height: 36px;
+    padding: 6px 12px;
+}
+.report-chart-figure {
+    margin: 22px 0 0;
+}
+.report-chart-unit {
+    margin-bottom: 35px;
+    color: var(--muted);
+    font-size: 12px;
+}
+.report-chart-canvas {
+    display: grid;
+    grid-template-columns: 44px minmax(0, 1fr);
+    height: 220px;
+}
+.report-chart-axis,
+.report-chart-plot {
+    position: relative;
+}
+.report-chart-axis > span {
+    position: absolute;
+    right: 14px;
+    transform: translateY(50%);
+    color: var(--muted);
+    font-size: 12px;
+    font-variant-numeric: tabular-nums;
+}
+.report-chart-grid,
+.report-chart-columns {
+    position: absolute;
+    inset: 0;
+}
+.report-chart-grid {
+    pointer-events: none;
+}
+.report-chart-grid > span {
+    position: absolute;
+    left: 0;
+    right: 0;
+    height: 1px;
+    background: var(--line);
+}
+.report-chart-columns,
+.report-chart-labels {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+.report-chart-column {
+    display: flex;
+    align-items: flex-end;
+    justify-content: center;
+    min-width: 0;
+    height: 100%;
+}
+.report-chart-bar {
+    position: relative;
+    width: clamp(28px, 40%, 88px);
+    height: var(--bar-height);
+    border-radius: 9px 9px 0 0;
+    background: linear-gradient(180deg, var(--rose), var(--plum));
+}
+.report-chart-value {
+    position: absolute;
+    left: 50%;
+    bottom: calc(100% + 9px);
+    transform: translateX(-50%);
+    color: var(--wine);
+    font-size: 20px;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+}
+.report-chart-labels {
+    padding: 14px 0 0 44px;
+    text-align: center;
+    color: var(--ink);
+    font-size: 13px;
+    gap: 5px;
+}
+.report-chart-caption {
+    margin: 20px 0 0;
+    color: var(--muted);
+    font-size: 12px;
+    line-height: 1.8;
+}
+.report-chart.is-animating .report-chart-bar {
+    animation: report-bar-rise 720ms cubic-bezier(0.22, 0.7, 0.25, 1) both;
+    animation-delay: calc(var(--bar-index) * 75ms);
+}
+@keyframes report-bar-rise {
+    from { height: 0; }
+    to { height: var(--bar-height); }
+}
+@media (max-width: 650px) {
+    .report-chart {
+        padding: 20px 14px 16px;
+    }
+    .report-chart-heading {
+        align-items: flex-start;
+        gap: 10px;
+    }
+    .report-chart-heading h3 {
+        font-size: 18px;
+    }
+    .report-chart-replay {
+        padding: 6px 8px;
+    }
+    .report-chart-canvas {
+        grid-template-columns: 32px minmax(0, 1fr);
+        height: 180px;
+    }
+    .report-chart-axis > span {
+        right: 10px;
+    }
+    .report-chart-labels {
+        padding-left: 32px;
+        font-size: 12px;
+    }
+    .report-chart-value {
+        font-size: 18px;
+    }
+}
+@media (prefers-reduced-motion: reduce) {
+    .report-chart.is-animating .report-chart-bar {
+        animation: none !important;
+    }
+    .report-chart-replay {
+        display: none;
+    }
+}
 .care-summary {
     display: grid;
     grid-template-columns: repeat(3, 1fr);
@@ -974,6 +1132,40 @@ main {
 }
 .wb-output #message-draft {
     min-height: 200px;
+}
+.wb-personality,
+.wb-tone-note {
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    padding: 16px 18px;
+    background: var(--blush);
+}
+.wb-personality {
+    margin: 22px 0;
+}
+.wb-personality > div {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+}
+.wb-personality strong,
+.wb-tone-note strong {
+    color: var(--plum);
+}
+.wb-personality p,
+.wb-tone-note p {
+    margin: 8px 0;
+    line-height: 1.8;
+}
+.wb-personality small,
+.wb-tone-note small {
+    color: var(--muted);
+    font-size: 12px;
+    line-height: 1.8;
+}
+.wb-tone-note {
+    margin: 0 0 18px;
 }
 .studio-ai-controls {
     margin-top: 18px;

@@ -8,6 +8,7 @@ const { createApp } = require('./main');
 const { initialize } = require('../database/setup');
 const { importSource, readSource, mapMembers } = require('../database/import-source');
 const aiCopy = require('./ai-copy');
+const { resolveCommunication } = require('../public/communication');
 const store = require('./store');
 const { goalCandidates, SCENARIOS, DEMO_SERVICE_PRICE, CARE_OUTCOMES, canContact, productFor } = require('../public/rules');
 const { OPPORTUNITIES, opportunityCandidates, matchesOpportunity } = require('../public/rules');
@@ -337,16 +338,16 @@ test('SQL Server 最小业务闭环验收', { timeout: 90000 }, async (t) => {
             generatorMode = 'valid';
         });
 
-        await t.test('文案风格传入生成器，默认兼容旧请求，非法风格不调用模型', async () => {
+        await t.test('语气按性格自动匹配并传入生成器，非法语气不调用模型', async () => {
             const current = await state();
-            assert.equal(current.ai.defaultStyle, 'friendly');
-            assert.equal(generationStyles[0], 'friendly');
+            assert.equal(current.ai.defaultStyle, 'auto');
+            assert.equal(generationStyles[0], resolveCommunication(copyMembers[0]).id);
             const request = { memberIds: [copyMembers[0].id], model: current.ai.defaultModel };
             for (const style of current.ai.styles) {
                 const response = await post('/copy/generate', { ...request, style: style.id });
                 assert.equal(response.status, 200);
                 assert.equal((await response.json()).items.length, 1);
-                assert.equal(generationStyles.at(-1), style.id);
+                assert.equal(generationStyles.at(-1), resolveCommunication(copyMembers[0], style.id).id);
             }
             const callsBefore = generationStyles.length;
             const countBefore = (await state()).copyDrafts.length;
