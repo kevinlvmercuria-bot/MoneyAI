@@ -4,7 +4,7 @@
 const { DatabaseSync } = require('node:sqlite');
 const path = require('node:path');
 
-const DB_PATH = path.join(__dirname, 'data', 'nailmate.db');
+const DB_PATH = path.join(__dirname, '..', 'data', 'nailmate.db');
 const db = new DatabaseSync(DB_PATH);
 
 // 1. 加字段（如果不存在）
