@@ -2985,3 +2985,6 @@ input[type="radio"] {
         grid-template-columns: repeat(2, minmax(0, 1fr));
     }
 }
+
+.source-history { padding-left: 20px; overflow-wrap: anywhere; }
+.source-history li { margin: 8px 0; }

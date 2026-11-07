@@ -50,3 +50,31 @@ BEGIN
         created_at datetime2(0) NOT NULL DEFAULT SYSUTCDATETIME()
     );
 END;
+
+IF OBJECT_ID(N'dbo.Products', N'U') IS NULL
+    CREATE TABLE dbo.Products (id varchar(40) NOT NULL PRIMARY KEY, profile nvarchar(max) NOT NULL CHECK (ISJSON(profile) = 1));
+
+IF OBJECT_ID(N'dbo.SourceRecords', N'U') IS NULL
+BEGIN
+    CREATE TABLE dbo.SourceRecords (
+        source_table varchar(40) NOT NULL,
+        source_id nvarchar(100) NOT NULL,
+        member_id varchar(5) NULL,
+        payload nvarchar(max) NOT NULL CHECK (ISJSON(payload) = 1),
+        PRIMARY KEY (source_table, source_id)
+    );
+    CREATE INDEX IX_SourceRecords_Member ON dbo.SourceRecords(member_id, source_table);
+END;
+
+IF OBJECT_ID(N'dbo.ImportRuns', N'U') IS NULL
+    CREATE TABLE dbo.ImportRuns (source_hash char(64) NOT NULL PRIMARY KEY, imported_at datetime2 NOT NULL DEFAULT SYSUTCDATETIME(), counts_json nvarchar(max) NOT NULL);
+
+IF OBJECT_ID(N'dbo.MemberProfileBackups', N'U') IS NULL
+    CREATE TABLE dbo.MemberProfileBackups (
+        source_hash char(64) NOT NULL, member_id varchar(5) NOT NULL,
+        profile nvarchar(max) NOT NULL, backed_up_at datetime2 NOT NULL DEFAULT SYSUTCDATETIME(),
+        PRIMARY KEY (source_hash, member_id)
+    );
+
+IF OBJECT_ID(N'dbo.MemberImportStage', N'U') IS NULL
+    CREATE TABLE dbo.MemberImportStage (id varchar(5) NOT NULL PRIMARY KEY, profile nvarchar(max) NOT NULL);

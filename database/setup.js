@@ -28,6 +28,8 @@ async function setup() {
     const pool = await connect();
     try {
         await initialize(pool);
+        const result = await require('./import-source').importSource(pool);
+        console.log(result.imported ? '来源数据库已导入。' : '来源数据库未变化，跳过导入。');
     } finally {
         await pool.close();
     }

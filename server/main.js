@@ -2,7 +2,7 @@
 
 const path = require('node:path');
 const express = require('express');
-const { connect, transaction } = require('./db');
+const { sql, connect, transaction } = require('./db');
 const store = require('./store');
 const { GOALS, SCENARIOS, MAX_TASKS_PER_ANALYSIS, DEMO_DATE, CARE_OUTCOMES, canContact, goalCandidates, buildReviewTask } = require('../public/rules');
 
@@ -24,6 +24,16 @@ function createApp(pool) {
         res.json(await transaction(pool, store.state, 'Shared'));
     });
 
+    app.get('/api/members/:id/details', async (req, res) => {
+        requireCondition(/^M\d{4}$/.test(req.params.id), 400, '会员编号无效');
+        res.json(await transaction(pool, async (tx) => {
+            const member = await tx.request().input('id', sql.VarChar(5), req.params.id)
+                .query('SELECT id FROM dbo.Members WHERE id = @id');
+            requireCondition(member.recordset.length, 404, '会员不存在');
+            return store.memberDetails(tx, req.params.id);
+        }, 'Shared'));
+    });
+
     function mutate(work) {
         return async (req, res) => {
             const response = await transaction(pool, async (tx) => {
@@ -35,7 +45,7 @@ function createApp(pool) {
         };
     }
 
-    app.post('/api/tasks', mutate(async (req, tx, { members, tasks }) => {
+    app.post('/api/tasks', mutate(async (req, tx, { members, tasks, products }) => {
         const { goal, memberIds } = req.body ?? {};
         requireCondition(typeof goal === 'string' && (goal === 'general' || Object.hasOwn(GOALS, goal)) &&
             Array.isArray(memberIds) && memberIds.length > 0 && memberIds.length <= MAX_TASKS_PER_ANALYSIS &&
@@ -46,11 +56,11 @@ function createApp(pool) {
         const candidates = goal === 'general'
             ? members.filter((member) => member.id === memberIds[0] && canContact(member) &&
                 !tasks.some((task) => task.memberId === member.id && task.status !== 'rejected'))
-            : goalCandidates(members, tasks, goal);
+            : goalCandidates(members, tasks, goal, products);
         const selected = candidates.filter((member) => memberIds.includes(member.id));
         requireCondition(selected.length === memberIds.length, 409, '候选名单已变化，或会员不符合联系资格。请刷新后重试');
         for (const member of selected) {
-            const task = buildReviewTask(member, null, goal);
+            const task = buildReviewTask(member, null, goal, products);
             await store.insertTask(tx, task);
             await store.log(tx, 'create_review_task', `${member.id} · ${task.strategy} · 加入待审核`);
         }

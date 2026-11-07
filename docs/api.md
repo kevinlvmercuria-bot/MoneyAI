@@ -7,6 +7,7 @@
 | 方法和路径 | 请求示例 | 成功响应 |
 | --- | --- | --- |
 | GET `/api/state` | 无 | `{ "members": [...], "tasks": [...], "logs": [...] }` |
+| GET `/api/members/:id/details` | 无 | `{ "orders": [...], "notes": [...], "contacts": [...], "appointments": [...], "careProfile": {...} }` |
 | POST `/api/tasks` | `{"goal":"balance","memberIds":["M0002"]}` | `{"created":1,"state":{...}}` |
 | POST `/api/tasks/:id/review` | `{"decision":"approve","message":"你好，需要帮你预约吗？"}` 或 `{"decision":"reject"}` | `{"state":{...}}` |
 | POST `/api/tasks/:id/execute` | `{"scenario":"booking"}` | `{"state":{...}}` |
@@ -53,3 +54,11 @@
 - 保存前检查会员联系资格，同一会员在本轮演示中只保存一次。重复或并发提交返回 409，记录和日志一起提交。
 - 会员快照增加 `careHandled`（是否已处理）、`carePaused`（是否暂不联系）。已处理会员退出推荐；「已沟通」「未回复」将有效 `contactDays` 设为 0；「不再营销」将有效 `consent` 设为 false。审核和执行会重新检查这些限制。
 - 这些限制由关怀记录派生，基础会员档案继续保留。重置演示时清空关怀记录、计划、任务和日志，恢复基础会员资格，重建初始任务。
+
+## 来源数据与产品
+
+状态快照增加 `products` 和 `dataSource`。产品包含 `id`、`name`、`style`、`price`，导入后另有 `type`、`isNew`、`isActive`、`launchDate`、`description`、`imageStatus`、`imageAlt`。产品推荐排除未上架、未发布和非美甲款式；新品邀约另检查 `isNew`。任务话术和依据在创建时保存，后续目录更新不改写既有任务。
+
+导入后的 `dataSource` 包含 `kind: "sqlite_import"`、`sourceHash`、`importedAt` 和各来源表的行数 `counts`。尚未导入时为 `{ "kind": "generated_demo" }`。会员增加 `displayName`、`latestNote`、`preferredTechnician`、`cycleConfidence`、`source` 等来源信息。
+
+会员历史接口返回来源 SQLite 中的原始字段，日期为来源字符串。`orders` 按 `order_date`、`notes` 按 `created_at`、`contacts` 按 `contact_date`、`appointments` 按 `appointment_date` 倒序，各最多 10 条。护理档案不存在时 `careProfile` 为 `null`。接口读取 SQL Server 中保存的快照；会员不存在返回 404，编号格式无效返回 400。

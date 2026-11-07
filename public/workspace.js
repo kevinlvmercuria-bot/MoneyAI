@@ -23,6 +23,8 @@
     let tasks = [];
     let logs = [];
     let careRecords = [];
+    let products = [];
+    let dataSource = {};
     let careMemberId = null;
     const careDrafts = new Map();
     let saving = false;
@@ -40,7 +42,7 @@
     }
 
     function applyState(state) {
-        ({ members, tasks, logs, careRecords = [] } = state);
+        ({ members, tasks, logs, careRecords = [], products = [], dataSource = {} } = state);
     }
 
     async function save(path, body, onSuccess) {
@@ -149,12 +151,12 @@
     }
 
     function goalPanel() {
-        const candidates = goalCandidates(members, tasks, selectedGoal);
+        const candidates = goalCandidates(members, tasks, selectedGoal, products);
         const tabs = Object.entries(GOALS).map(([key, goal]) =>
             `<button class="filterbtn ${selectedGoal === key ? 'active' : ''}" aria-pressed="${selectedGoal === key}" data-goal="${key}">${goal.label}</button>`
         ).join('');
         const cards = candidates.map((member, index) => {
-            const draft = buildReviewTask(member, null, selectedGoal);
+            const draft = buildReviewTask(member, null, selectedGoal, products);
             return `<article class="hanger" data-candidate="${member.id}" style="--drop:${index % 2 ? 22 : 8}px">
                 <div class="cord" aria-hidden="true"></div><div class="tilt"><div class="card">
                     <div class="face front" aria-hidden="false">
@@ -415,6 +417,9 @@
         });
         const pending = tasks.filter((task) => task.status === 'pending_review').length;
         document.getElementById('pending-badge').textContent = pending || '';
+        document.getElementById('data-origin').textContent = dataSource.kind === 'sqlite_import'
+            ? `来源数据已导入 · ${products.length} 项演示产品`
+            : '固定生成的演示资料';
         document.getElementById('logs').innerHTML = logs.length ? logs.map((entry) =>
             `<li>[${escapeHtml(entry.time)}] ${escapeHtml(entry.desc)}</li>`
         ).join('') : '<li>暂无操作记录。</li>';
@@ -430,13 +435,41 @@
     function headModal(kicker, title) {
         return `<div class="modal-head"><div><p class="kicker">${kicker}</p><h2>${title}</h2></div><button class="modal-close" data-action="close" aria-label="关闭">×</button></div>`;
     }
-    function memberModal(id) {
+    async function memberModal(id) {
         const m = members.find((m) => m.id === id);
         if (!m) return;
-        let p = productFor(m);
+        const p = productFor(m, products);
         modal(
-            `${headModal('MEMBER PROFILE · DEMO', m.id + ' · 会员详情')}<div style="display:flex;gap:9px;align-items:center">${chip(m.lifecycle)}<span class="tiny-note">${m.level} · ${m.style} / ${m.secondary}</span></div><div class="detailgrid"><div class="detailitem"><small>距离最近到店</small><strong>${m.days} 天</strong></div><div class="detailitem"><small>平均复购周期</small><strong>${m.cycle} 天</strong></div><div class="detailitem"><small>复购偏离</small><strong>${m.ratio} ×</strong></div><div class="detailitem"><small>累计消费</small><strong>${money(m.spend)}</strong></div><div class="detailitem"><small>储值余额</small><strong>${money(m.bal)}</strong></div><div class="detailitem"><small>历史消费次数</small><strong>${m.visits} 次</strong></div></div><div class="sectlabel">经营判断与数据依据</div><div class="quote">${m.days} 天未到店，平均 ${m.cycle} 天到店一次；当前分类为「${LIFECYCLE_LABELS[m.lifecycle]}」。${canContact(m) ? '已通过初步营销资格过滤，可考虑人工审核后进行个性化关怀。' : !m.consent ? '未获营销授权，已从经营目标候选中排除。' : '当前存在营销资格限制，暂不应营销触达。'}<br/>授权：${m.consent ? '已同意' : '未同意'} · 近期联系：${m.contactDays} 天前 · 未处理投诉：${m.complaint ? '有' : '无'} · 未来预约：${m.appointment ? '有' : '无'}</div><div class="sectlabel">新品推荐参考</div><div class="quote">${p ? `${p.name} · ${p.style} · ${money(p.price)}（虚拟产品库）` : '暂无匹配款式'}</div><div class="modal-actions"><button class="btn outline" data-action="close">关闭</button><button class="btn outline" data-action="prepare-care" data-id="${m.id}" ${!canContact(m) || m.careHandled ? 'disabled' : ''}>沟通准备</button><button class="btn" data-action="newtask" data-id="${m.id}" ${!canContact(m) ? 'disabled title="未通过营销资格"' : ''}>加入待审核任务</button></div>`,
+            `${headModal('MEMBER PROFILE · DEMO', m.id + ' · 会员详情')}<div style="display:flex;gap:9px;align-items:center">${chip(m.lifecycle)}<span class="tiny-note">${m.level} · ${m.style} / ${m.secondary}</span></div><div class="detailgrid"><div class="detailitem"><small>距离最近到店</small><strong>${m.days} 天</strong></div><div class="detailitem"><small>平均复购周期</small><strong>${m.cycle} 天</strong></div><div class="detailitem"><small>复购偏离</small><strong>${m.ratio} ×</strong></div><div class="detailitem"><small>累计消费</small><strong>${money(m.spend)}</strong></div><div class="detailitem"><small>储值余额</small><strong>${money(m.bal)}</strong></div><div class="detailitem"><small>历史消费次数</small><strong>${m.visits} 次</strong></div></div><div class="sectlabel">经营判断与数据依据</div><div class="quote">${m.days} 天未到店，平均 ${m.cycle} 天到店一次；当前分类为「${LIFECYCLE_LABELS[m.lifecycle]}」。${canContact(m) ? '已通过初步营销资格过滤，可考虑人工审核后进行个性化关怀。' : !m.consent ? '未获营销授权，已从经营目标候选中排除。' : '当前存在营销资格限制，暂不应营销触达。'}<br/>授权：${m.consent ? '已同意' : '未同意'} · 近期联系：${m.contactDays} 天前 · 未处理投诉：${m.complaint ? '有' : '无'} · 未来预约：${m.appointment ? '有' : '无'}</div><div class="sectlabel">匹配产品参考</div><div class="quote">${p ? `${p.name} · ${p.style} · ${money(p.price)}（演示产品目录）` : '暂无匹配款式'}</div><div id="member-source-details" data-id="${m.id}">正在加载历史记录…</div><div class="modal-actions"><button class="btn outline" data-action="close">关闭</button><button class="btn outline" data-action="prepare-care" data-id="${m.id}" ${!canContact(m) || m.careHandled ? 'disabled' : ''}>沟通准备</button><button class="btn" data-action="newtask" data-id="${m.id}" ${!canContact(m) ? 'disabled title="未通过营销资格"' : ''}>加入待审核任务</button></div>`,
         );
+        try {
+            const details = await api(`/members/${id}/details`);
+            const container = document.getElementById('member-source-details');
+            if (container?.dataset.id === id) container.innerHTML = sourceHistory(details);
+        } catch (error) {
+            const container = document.getElementById('member-source-details');
+            if (container?.dataset.id === id) container.textContent = '历史资料加载失败：' + error.message;
+        }
+    }
+
+    function sourceHistory(details) {
+        const sections = [
+            ['最近消费记录', details.orders.map((row) => [row.order_date, row.style, money(row.amount), row.technician])],
+            ['会员备注', details.notes.map((row) => [row.created_at, row.note_text, row.author_name])],
+            ['历史联系', details.contacts.map((row) => [row.contact_date, row.channel, row.outcome, row.staff_name])],
+            ['预约记录', details.appointments.map((row) => [row.appointment_date, row.status, row.technician])],
+        ];
+        let html = sections.map(([title, rows]) => `<details><summary>${title} · 最近 ${rows.length} 条</summary>
+            ${rows.length ? `<ul class="source-history">${rows.map((cells) => `<li>${cells.map(escapeHtml).join(' · ')}</li>`).join('')}</ul>` : '<p class="helper">暂无来源记录。</p>'}</details>`).join('');
+        const profile = details.careProfile;
+        if (profile) html += `<details><summary>护理档案</summary>
+            <p>最近服务：${escapeHtml(profile.last_service_type)}</p>
+            <p>需求标签：${escapeHtml(profile.care_need_tags)}</p>
+            <p>建议服务：${escapeHtml(profile.preferred_care_service)}</p>
+            <p>${escapeHtml(profile.care_guidance)}</p>
+            <p class="helper">来源计划日期：${escapeHtml(profile.recommended_followup_date)} · 状态 ${escapeHtml(profile.care_followup_status)}</p>
+        </details>`;
+        return html;
     }
     function taskModal(id) {
         const t = tasks.find((t) => t.id === id);

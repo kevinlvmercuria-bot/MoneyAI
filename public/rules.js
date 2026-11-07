@@ -44,28 +44,30 @@ const NailMateRules = (() => {
             ),
         );
     }
-    function productFor(m) {
-        return PRODUCTS.find((product) => product.style === m.style);
+    function productFor(m, products = PRODUCTS, newOnly = false) {
+        return products.find((product) => product.style === m.style && product.isActive !== false &&
+            (!product.type || product.type === 'nail_style') && (!newOnly || product.isNew !== false) &&
+            (!product.launchDate || product.launchDate <= DEMO_DATE));
     }
-    function matchesGoal(member, goal) {
+    function matchesGoal(member, goal, products = PRODUCTS) {
         switch (goal) {
             case 'wake': return member.lifecycle === 'dormant';
             case 'balance': return member.bal > 0 && member.days > member.cycle;
             case 'launch':
-                return ['due', 'low_frequency'].includes(member.lifecycle) && Boolean(productFor(member));
+                return ['due', 'low_frequency'].includes(member.lifecycle) && Boolean(productFor(member, products, true));
             default: return false;
         }
     }
 
-    function goalReason(member, goal) {
+    function goalReason(member, goal, products = PRODUCTS) {
         const timing = `${member.days} 天未到店 · 平均周期 ${member.cycle} 天`;
         if (goal === 'balance') return `${timing} · 储值余额 ${money(member.bal)}`;
-        if (goal === 'launch') return `${timing} · 偏好${member.style} · 匹配「${productFor(member).name}」`;
+        if (goal === 'launch') return `${timing} · 偏好${member.style} · 匹配「${productFor(member, products, true).name}」`;
         return `${timing} · 偏离 ${member.ratio} 倍`;
     }
 
-    function buildReviewTask(member, taskId, goal = 'general') {
-        const product = productFor(member);
+    function buildReviewTask(member, taskId, goal = 'general', products = PRODUCTS) {
+        const product = productFor(member, products, goal === 'launch');
         let message = `你好呀，上次做的${member.style}款式还喜欢吗？如果最近想换个新造型，欢迎来看看～`;
         if (goal === 'wake') {
             message = `你好呀，上次做的${member.style}款式还喜欢吗？最近有想换款的计划吗？想做的话我可以帮你看看预约时间。`;
@@ -82,17 +84,17 @@ const NailMateRules = (() => {
             strategy: GOALS[goal]?.label || '通用演示',
             priority: priorityScore(member),
             message,
-            reason: goalReason(member, goal),
+            reason: goalReason(member, goal, products),
             editedMessage: '',
             result: null,
         };
     }
 
-    function goalCandidates(members, tasks, goal) {
+    function goalCandidates(members, tasks, goal, products = PRODUCTS) {
         const sortBy = GOALS[goal].sortBy;
         const occupied = new Set(tasks.filter((task) => task.status !== 'rejected').map((task) => task.memberId));
         return members
-            .filter((member) => matchesGoal(member, goal) && canContact(member) && !member.careHandled && !occupied.has(member.id))
+            .filter((member) => matchesGoal(member, goal, products) && canContact(member) && !member.careHandled && !occupied.has(member.id))
             .sort((a, b) => b[sortBy] - a[sortBy] || a.id.localeCompare(b.id))
             .slice(0, MAX_TASKS_PER_ANALYSIS);
     }

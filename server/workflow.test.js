@@ -6,8 +6,9 @@ const { randomBytes } = require('node:crypto');
 const { connect, transaction } = require('./db');
 const { createApp } = require('./main');
 const { initialize } = require('../database/setup');
+const { importSource, readSource, mapMembers } = require('../database/import-source');
 const store = require('./store');
-const { goalCandidates, SCENARIOS, DEMO_SERVICE_PRICE, CARE_OUTCOMES, canContact } = require('../public/rules');
+const { goalCandidates, SCENARIOS, DEMO_SERVICE_PRICE, CARE_OUTCOMES, canContact, productFor } = require('../public/rules');
 
 test('SQL Server 最小业务闭环验收', { timeout: 90000 }, async (t) => {
     // 仅创建和清理本次随机命名的测试库，避免重置日常演示库。
@@ -203,6 +204,58 @@ test('SQL Server 最小业务闭环验收', { timeout: 90000 }, async (t) => {
             const member = current.members.find((member)=>member.id===affectedId);
             assert.equal(member.careHandled,false);
             assert.equal(canContact(member),true);
+        });
+
+        await t.test('来源数据库完整导入，保留业务记录并备份会员', async () => {
+            const before = await state();
+            const candidate = goalCandidates(before.members, before.tasks, 'balance')[0];
+            assert.equal((await post('/care-records', {
+                memberId: candidate.id, outcome: '暂不联系', note: '导入前记录', owner: '店长', followUp: null,
+            })).status, 200);
+            const existing = await state();
+            const result = await importSource(pool);
+            assert.equal(result.imported, true);
+            assert.equal(result.counts.members, 2800);
+            assert.equal(result.counts.products, 24);
+            const current = await state();
+            assert.deepEqual(current.tasks, existing.tasks);
+            assert.deepEqual(current.careRecords, existing.careRecords);
+            assert.deepEqual(current.logs, existing.logs);
+            assert.equal(current.products.length, 24);
+            assert.equal(current.dataSource.kind, 'sqlite_import');
+            const expected = mapMembers(readSource().rows).find((member) => member.id === 'M0001');
+            const actual = current.members.find((member) => member.id === 'M0001');
+            assert.equal(actual.latestNote, expected.latestNote);
+            assert.equal(actual.contactDays, expected.contactDays);
+            const backup = await pool.request().query('SELECT COUNT(*) AS total FROM dbo.MemberProfileBackups');
+            assert.equal(backup.recordset[0].total, 2800);
+            const archived = await pool.request().query('SELECT COUNT(*) AS total FROM dbo.SourceRecords');
+            assert.equal(archived.recordset[0].total, Object.values(result.counts).reduce((sum, value) => sum + value, 0));
+            const repeated = await importSource(pool);
+            assert.equal(repeated.imported, false);
+            assert.deepEqual((await state()).tasks, existing.tasks);
+        });
+
+        await t.test('会员历史接口及导入目录的新产品用于实际任务', async () => {
+            const details = await fetch(base + '/api/members/M0001/details');
+            assert.equal(details.status, 200);
+            const history = await details.json();
+            assert.ok(history.orders.length > 0 && history.orders.length <= 10);
+            assert.ok(history.notes.length > 0);
+            assert.equal(history.careProfile.member_id, 'M0001');
+            assert.equal((await fetch(base + '/api/members/M9999/details')).status, 404);
+            const current = await state();
+            const candidate = goalCandidates(current.members, current.tasks, 'launch', current.products)[0];
+            assert.ok(candidate);
+            const product = productFor(candidate, current.products, true);
+            assert.equal(product.isNew, true);
+            assert.equal(product.isActive, true);
+            assert.equal(product.type, 'nail_style');
+            const response = await post('/tasks', {goal:'launch',memberIds:[candidate.id]});
+            assert.equal(response.status, 200);
+            const task = (await response.json()).state.tasks.at(-1);
+            assert.ok(task.message.includes(product.name));
+            assert.ok(task.reason.includes(product.name));
         });
     } finally {
         if (server) {

@@ -4,7 +4,7 @@
   "private": true,
   "description": "NailMate Express API and SQL Server integration scaffold",
   "engines": {
-    "node": ">=22"
+    "node": ">=22.13.0"
   },
   "scripts": {
     "start": "node server/main.js",
@@ -12,7 +12,8 @@
     "db:init": "node database/setup.js",
     "test": "node --test server/workflow.test.js",
     "check": "node --check server/main.js && node --check server/store.js && node --check database/setup.js && node --check public/workspace.js",
-    "test:legacy": "node --test server/app.test.js"
+    "test:legacy": "node --test server/app.test.js",
+    "db:import": "node database/import-source.js"
   },
   "dependencies": {
     "dotenv": "18.0.9",

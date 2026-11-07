@@ -1,7 +1,7 @@
 'use strict';
 
 const { sql } = require('./db');
-const { SCENARIOS, DEMO_SERVICE_PRICE, buildReviewTask } = require('../public/rules');
+const { SCENARIOS, DEMO_SERVICE_PRICE, buildReviewTask, PRODUCTS } = require('../public/rules');
 
 function toTask(row) {
     const scenario = SCENARIOS[row.scenario];
@@ -31,6 +31,8 @@ async function state(tx) {
             CONVERT(char(10), follow_up, 23) AS followUp,
             CONVERT(char(10), recorded_as_of, 23) AS recordedAsOf
         FROM dbo.CareRecords ORDER BY id DESC;
+        SELECT profile FROM dbo.Products ORDER BY id;
+        SELECT TOP (1) source_hash AS sourceHash, counts_json AS counts, imported_at AS importedAt FROM dbo.ImportRuns ORDER BY imported_at DESC;
     `);
     const careRecords = recordsets[3];
     const careByMember = new Map(careRecords.map((record) => [record.memberId, record]));
@@ -45,6 +47,8 @@ async function state(tx) {
             return member;
         }),
         careRecords,
+        products: recordsets[4].length ? recordsets[4].map((row) => JSON.parse(row.profile)) : PRODUCTS,
+        dataSource: recordsets[5].length ? { ...recordsets[5][0], counts: JSON.parse(recordsets[5][0].counts), kind: 'sqlite_import' } : { kind: 'generated_demo' },
         tasks: recordsets[1].map(toTask),
         logs: recordsets[2].map((row) => ({
             name: row.name, desc: row.desc,
@@ -97,4 +101,17 @@ async function insertCareRecord(tx, record) {
             VALUES (@memberId, @outcome, @note, @owner, @followUp, @recordedAsOf)`);
 }
 
-module.exports = { state, insertTask, updateTask, log, seedTask, insertCareRecord };
+async function memberDetails(tx, memberId) {
+    const { recordset } = await tx.request().input('memberId', sql.VarChar(5), memberId)
+        .query(`SELECT source_table, payload FROM dbo.SourceRecords WHERE member_id = @memberId
+            AND source_table IN ('orders', 'member_notes', 'contact_logs', 'appointments', 'member_care_profiles')`);
+    const rows = (name, date) => recordset.filter((row) => row.source_table === name)
+        .map((row) => JSON.parse(row.payload)).sort((a, b) => String(b[date]).localeCompare(String(a[date]))).slice(0, 10);
+    return {
+        orders: rows('orders', 'order_date'), notes: rows('member_notes', 'created_at'),
+        contacts: rows('contact_logs', 'contact_date'), appointments: rows('appointments', 'appointment_date'),
+        careProfile: rows('member_care_profiles', 'updated_at')[0] || null,
+    };
+}
+
+module.exports = { state, insertTask, updateTask, log, seedTask, insertCareRecord, memberDetails };
