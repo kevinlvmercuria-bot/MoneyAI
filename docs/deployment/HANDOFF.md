@@ -1,6 +1,6 @@
 # MoneyAI 部署交接
 
-最后核验时间为 2026-11-11（北京时间）。当前执行第二阶段。项目也称 NailMate AI，为美甲店提供老板娘和员工账号、顾客联系分派、反馈、备注、预约、今日待办及护理回访。目标是保留可独立运行的本地版，将新版账号工作台迁到 Neon PostgreSQL，通过 GitHub 和 Render Web Service 小范围试用。旧版 AI 审核工作台留在本地。真实收银接入等商家确认系统和订单导出能力后再安排。
+最后核验时间为 2026-11-11（北京时间）。第二阶段的代码、隔离验收和恢复演练已完成。项目也称 NailMate AI，为美甲店提供老板娘和员工账号、顾客联系分派、反馈、备注、预约、今日待办及护理回访。目标是保留可独立运行的本地版，将新版账号工作台迁到 Neon PostgreSQL，通过 GitHub 和 Render Web Service 小范围试用。旧版 AI 审核工作台留在本地。真实收银接入等商家确认系统和订单导出能力后再安排。
 
 ## 长期执行规则
 
@@ -15,7 +15,7 @@
 | 阶段 | 状态 | 范围和验收 |
 | --- | --- | --- |
 | 1. 备份与建立分支 | 已通过本阶段验收 | 确认运行版本和远端关系，保护现有修改，完成源码备份和 SQL Server 备份校验，创建本地部署分支，验证本地访问。独立数据库恢复演练安排在正式试用前。 |
-| 2. 业务日期与回访待办 | 进行中，检查点 A、B、C 已通过 | 操作日期使用服务端北京时间。最近一次可信的已完成美甲服务第 21 天到期，第 20 天无待办，第 22 天未处理仍保留。按订单去重，老板娘分派后进入员工待办。已处理、约好对应维护或有更新服务记录时关闭旧提醒。验证跨午夜、停机补算和并发。 |
+| 2. 业务日期与回访待办 | A、B、C、D 已通过 | 已在隔离环境验证服务端北京时间、第 21 天待办、停机补算和并发。账号权限回归及 SQL Server 独立恢复通过。现行门店进程的迁移和切换单独安排。 |
 | 3. Neon 迁移与数据安全 | 尚未开始 | 在独立试用库迁移新版账号、任务、反馈、备注、产品图片和回访状态。验证权限、离职交接、并发、持久化及隔离备份恢复。 |
 | 4. GitHub 与 Render 部署 | 尚未开始 | 推送部署分支后构建 Render Web Service。配置端口、HTTPS、正式登录和限流、健康检查、环境变量及定时备份。开放前初始化老板娘账号，用店内手机验证一位老板娘和一位员工的流程。实例休眠后通过访问补算回访。 |
 
@@ -63,7 +63,7 @@ GitHub API 实查的远端为 `https://github.com/kevinlvmercuria-bot/MoneyAI.gi
 | 本地敏感配置 | `private-config/.env.dpapi` 使用 Windows 当前用户保护加密，已验证解密内容与原件一致。跨机器或账号回退时，通过受控渠道重新配置所需值。 |
 | SQL Server `NailMate` | `sql/NailMate-stage1-copy-only.bak`，31,449,088 字节。执行了 `BACKUP DATABASE ... WITH COPY_ONLY, CHECKSUM`、`RESTORE VERIFYONLY ... WITH CHECKSUM` 和 `RESTORE HEADERONLY`。确认是同名数据库的完整副本，有备份校验和。SHA-256 为 `f77f794231a3f0c7a2f81f5a739d033ee7534a54494d735ec610cebd02a481db`，见 `sql/backup-verification.json`。 |
 
-备份目录访问权限限于当前 Windows 用户、SYSTEM 和管理员。SQL Server 服务账号另有 `sql` 子目录的写入权限。依赖目录可按锁文件重装。代码回退时，在新目录使用对应 Git bundle 和 `source` 快照恢复，先核对清单和本地配置。数据库完整恢复待验证，正式试用前把备份恢复到独立数据库和文件位置，检查账号、任务、反馈、备注及数据完整性。避免使用现有 `NailMate` 名称或数据文件作为恢复目标。
+备份目录访问权限限于当前 Windows 用户、SYSTEM 和管理员。SQL Server 服务账号另有 `sql` 子目录的写入权限。依赖目录可按锁文件重装。代码回退时，在新目录使用对应 Git bundle 和 `source` 快照恢复，先核对清单和本地配置。数据库恢复的实际命令、隔离路径和核对结果见检查点 D。
 
 [SQL Server COPY_ONLY 备份](https://learn.microsoft.com/en-us/sql/relational-databases/backup-restore/copy-only-backups-sql-server) · [SQL Server VERIFYONLY](https://learn.microsoft.com/en-us/sql/t-sql/statements/restore-statements-verifyonly-transact-sql)
 
@@ -97,8 +97,33 @@ GitHub API 实查的远端为 `https://github.com/kevinlvmercuria-bot/MoneyAI.gi
 
 - `public/team-store.js` 修复同名员工重新开通账号时会继承原员工历史访问范围的问题。老板娘继续查看旧任务、反馈与备注，员工端从后端鉴权后的任务归属计算可访问客户。已交接的任务仍保留原反馈人和时间。C 无数据库结构变更。
 - `server/team.test.js` 在隔离 SQL Server 中验证老板娘分派、查看反馈和并发拒重。两位员工分别验证只能访问本人任务及备注。越权任务 ID 返回 404，员工调用老板娘接口或改派返回 403，伪造老板娘身份请求返回 401。离职后旧会话和原凭据返回 401，同名新账号只访问显式分派的任务。重启后任务、反馈历史和备注仍可读取。
-- `TZ=America/Los_Angeles` 下 `npm run test:team` 11 项通过，`npm run check` 通过，`npm run test:legacy` 2 项通过。C 的检查点提交标题为 `fix: preserve employee access boundaries after handoff`。
+- `TZ=America/Los_Angeles` 下 `npm run test:team` 11 项通过，`npm run check` 通过，`npm run test:legacy` 2 项通过。C 的本地检查点为 `a654663`。
+
+### D. SQL Server 独立恢复，已通过
+
+- 第一阶段 `NailMate-stage1-copy-only.bak` 的 SHA-256 与清单一致。通过 `RESTORE HEADERONLY` 和 `RESTORE FILELISTONLY` 确认是一份带校验和的完整备份，有一份数据文件和一份日志文件。当前账号有恢复权限，目标磁盘有约 148 GB 可用空间，备份内两份文件共约 285 MB。
+- 恢复到 `localhost\SQLEXPRESS` 上新建的 `NailMate_RestoreStage2_75e74a4e5130`。执行 `RESTORE VERIFYONLY ... WITH CHECKSUM, MOVE ...`，随后执行 `RESTORE DATABASE ... WITH CHECKSUM, STOP_ON_ERROR, RECOVERY, RESTRICTED_USER, MOVE ...`，两份文件均重定向至备份树下独立目录。运行 `DBCC CHECKDB ([NailMate_RestoreStage2_75e74a4e5130]) WITH NO_INFOMSGS, ALL_ERRORMSGS, TABLERESULTS`，报告 0 个错误。完整命令、逻辑文件名、源路径和目标路径均保存在本地受控证据文件。
+- 恢复库为 `ONLINE / RESTRICTED_USER`。原 `NailMate` 仍在线，数据库 ID 保持 5，回访新表尚未应用。原网站进程 PID 61688 继续监听 `127.0.0.1:3000`，会话和静态脚本接口返回 HTTP 200。
+- 恢复后读取到 2,800 位会员、2 条账号记录、1 条旧版任务、1,537 条来源会员备注。新版状态可被当前工作台读取，共 5 项任务，其中 4 项待联系、1 项已登记。该任务有 2 条反馈历史，另有 1 条反馈记录和 1 条新版备注。第一阶段备份早于回访表迁移。
+- 文件和证据位于 `C:\Users\Kevin\MoneyAI-backups\stage1-20261111-180956-8e11f7\sql\NailMate_RestoreStage2_75e74a4e5130\verification.json` 所在目录。恢复库保留为受限的本地副本。
+
+[SQL Server 恢复参数及 MOVE](https://learn.microsoft.com/en-us/sql/t-sql/statements/restore-statements-arguments-transact-sql) · [DBCC CHECKDB](https://learn.microsoft.com/en-us/sql/t-sql/database-console-commands/dbcc-checkdb-transact-sql)
+
+### 第二阶段复验命令和结果
+
+| 测试 | 环境和复验方式 | 实际结果 |
+| --- | --- | --- |
+| 北京时间零点、UTC 日期差异、14 天边界、演示日期隔离 | `TZ=America/Los_Angeles` 下运行 `npm run test:team` | 通过 |
+| 本地访问、已打开的页面跨零点 | Playwright 阻断非本机请求，隔离服务器注入 23:59:59 和 00:00:00，保持同一浏览器页面 | 通过 |
+| 第 20/21/22 天、重复访问、并发生成和分派、失败重试 | `npm run test:team` 的 SQL 回访测试，隔离库和模拟订单 | 通过 |
+| 日期更正、已处理、对应预约、无关预约、新服务、取消或未完成订单 | 同一隔离 SQL 回访测试及纯业务规则夹具 | 通过 |
+| 未分派员工不可见、越权、离职与同名新账号 | `npm run test:team` 的 SQL 账号测试，隔离库和两名员工 | 通过 |
+| 重启后任务、反馈和备注 | SQL 账号及回访测试中重建本地 HTTP 服务并重新登录 | 通过 |
+| 独立恢复及原库状态 | 按证据文件重放 SQL 验证命令，仅对原库做状态核查 | 通过 |
+| 旧版及业务流程 | `npm test` 32 项、`npm run test:legacy` 2 项 | 通过 |
+
+自动化合计 45 项通过，0 项失败。Playwright 的日期切换、账号版回访分派和分享版为另外验证的浏览器场景。真实收银数据、门店正式账号和手机验收仍待后续阶段。
 
 ## 下一轮从这里继续
 
-核对当前分支和本节已验收检查点，接着执行 D。只使用第一阶段已校验备份，恢复到不同名称和独立文件路径，再做完整性检查及记录核对。
+核对当前分支和上述四个已验收检查点。收到第三阶段任务后，再准备独立 Neon 试用库并核对迁移范围，重点包括 `TeamCareReminders` 的唯一键、事务与访问控制。若需要先在原本地门店服务启用第二阶段，另行安排原库备份、增量脚本和服务切换窗口。
