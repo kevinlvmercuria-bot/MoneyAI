@@ -394,6 +394,16 @@
 
   // Ported from the enhanced preview: member context, rules demo, image card and review.
   const WB_OBJECTIVES={repurchase:'复购邀请',balance:'储值关怀',new_product:'新品推荐',care:'护理关怀',preview:'新品预告',greeting:'日常问候'};
+  const WB_TONES={
+    friendly:{style:'friendly',greeting:'，最近还好吗？',checkIn:'今天想到你，来打个招呼。祝你这周顺顺利利。',offer:'有兴趣的话，我可以发图给你看看。',care:'有什么需要维护的地方，随时和我说。'},
+    cute:{style:'cute',greeting:'你好呀～',checkIn:'今天想起来跟你打个招呼，最近过得怎么样呀？',offer:'想看看图的话，我发给你呀。',care:'有想调整的地方，随时跟我说呀。'},
+    gentle:{style:'gentle',greeting:'，最近过得好吗？',checkIn:'想来问候一下你，有空的时候再聊就好。',offer:'如果你想看看，我可以发图，你有空慢慢挑。',care:'想调整或维护的话，等你方便时和我说就好。'},
+    brief:{style:'concise',greeting:'，你好。',checkIn:'最近过得怎么样？',offer:'想看图的话告诉我。',care:'需要维护的话，可以和我说。'},
+    elegant:{style:'elegant',greeting:'，你好。',checkIn:'想问候一下你的近况，祝你这周顺利。',offer:'若你有兴趣，我可以发款式图供你参考。',care:'如需安排维护，可以告诉我方便的时间。'},
+  };
+  const WB_TONE_LABELS=Object.fromEntries(Object.entries(WB_TONES).map(([id,tone])=>[
+    id,globalThis.NailMateCommunication.resolveCommunication(null,tone.style).label,
+  ]));
   const workbenchDrafts={};
   ui.workbench={member_id:ui.employee?null:'M0001',objective:'repurchase',tone:'friendly',product_id:'',draft:'',loadedKey:null,revision:0};
   function workbenchProducts(m,objective){
@@ -458,7 +468,7 @@
       <section class="wb-note-section"><h3>客户备注</h3>${notes.length?`<ul class="wb-notes">${notes.map(note=>`<li><small>${note.is_pinned?'置顶 · ':''}${escape(NOTE_LABELS[note.note_type]||'备注')} · ${escape(note.author_name||'老板娘')}</small>${escape(note.note_text)}</li>`).join('')}</ul>`:'<p class="helper">暂时没有备注，可以先到会员档案补充。</p>'}${ui.employee?'':`<button data-open-profile="${m.member_id}">查看或补充会员备注</button>`}</section>
       <details class="wb-preparation" open><summary>沟通准备 · 先了解，再推荐</summary><h4>为什么值得关注</h4><p>${careMode||noProduct||w.objective==='preview'?escape(opportunityEvidence(m,w.objective,p)):`当前为个人复购周期的 <b>${m.ratio} 倍</b>，状态为“${LABELS[m.lifecycle]}”。历史偏好与客户备注是沟通参考。`}</p><h4>待本人确认</h4><p>${noProduct?'听听顾客近况，确认是否需要协助，以及什么时候方便再联系。':w.objective==='preview'?'确认是否想看这款的配色或效果。':careMode?'这次佩戴是否舒服，甲面和甲缘状态如何，是否需要护理建议。':'近期是否仍有美甲或护理需求、上次体验如何、希望怎样被联系；未到店原因需听本人表达。'}</p><h4>这次的小目标</h4><p>${noProduct||w.objective==='preview'?escape(opportunityAction(m,w.objective,p)):w.objective==='care'?'先询问甲周、甲面及日常护理需求，确认意愿后再介绍合适服务。':'了解一条顾客明确表达的需求，或确认她喜欢的款式和方便沟通的方式。'}</p></details>
       </aside><section class="wb-output"><header class="wb-output-header"><div><h3>沟通草稿</h3><p>给 ${escape(m.name)} · ${WB_OBJECTIVES[w.objective]}</p></div><span class="pill">规则演示 · 未调用模型</span></header>
-      <div class="wb-control-grid"><div class="wb-field"><label for="objective">这次想聊什么？</label><select id="objective">${Object.entries(WB_OBJECTIVES).map(([value,label])=>`<option value="${value}" ${w.objective===value?'selected':''}>${label}</option>`).join('')}</select></div><div class="wb-field"><label for="tone">表达方式</label><select id="tone"><option value="friendly" ${w.tone==='friendly'?'selected':''}>自然亲切</option><option value="brief" ${w.tone==='brief'?'selected':''}>简洁直接</option></select></div></div>
+      <div class="wb-control-grid"><div class="wb-field"><label for="objective">这次想聊什么？</label><select id="objective">${Object.entries(WB_OBJECTIVES).map(([value,label])=>`<option value="${value}" ${w.objective===value?'selected':''}>${label}</option>`).join('')}</select></div><div class="wb-field"><label for="tone">表达方式</label><select id="tone">${Object.entries(WB_TONE_LABELS).map(([value,label])=>`<option value="${value}" ${w.tone===value?'selected':''}>${label}</option>`).join('')}</select></div></div>
       ${noProduct?`<p class="wb-action-note"><b>本次行动</b> · ${escape(opportunityAction(m,w.objective,p))}</p>`:`<div class="wb-field"><label for="studio-product">${w.objective==='preview'?'本次预告的款式':'本次推荐的产品 / 服务'}</label><select id="studio-product">${products.map(product=>`<option value="${product.product_id}" ${p&&product.product_id===p.product_id?'selected':''}>${escape(product.product_name)} · ${escape(offerLabel(product))}</option>`).join('')}</select></div>`}
       ${p?`<div class="wb-product">${workbenchPhoto(p)}<div><h4>${escape(p.product_name)}</h4><p>${escape(p.description)}</p><div class="wb-price">${escape(offerLabel(p))}</div>${catalogSwatch(p)?'<p class="helper">AI 甲片示意图 · 款式参考</p>':catalogReference(p)?'<p class="helper">网络参考图 · 可在产品库查看来源</p>':''}${ui.employee?'':`<button data-wb-upload="${p.product_id}">${catalogPhoto(p)?'更换产品图':'上传产品实拍'}</button>`}</div></div>`:noProduct?'':`<p class="empty">${w.objective==='preview'?'暂无符合条件的预告款式。':'暂时没有匹配的在售产品，请先到产品库补充。'}</p>`}
       <div class="wb-generate-row"><p>参考 ${notes.length} 条客户备注${noProduct?'与联系记录':'与款式或服务信息'}</p><button class="primary" data-wb-generate ${reasons.length||needsOffer?'disabled':''}>生成演示话术</button></div>
@@ -471,19 +481,32 @@
   }
   function buildWorkbenchMessage(m,p,settings=ui.workbench){
     const w=settings,notes=profileNotes(m.member_id).map(n=>n.note_text).join(' '),soft=/不喜欢.*促销|不要强推/.test(notes),shape=notes.includes('短方圆')?'短方圆甲型搭起来也很自然，':'';
-    const opening=w.tone==='brief'?`${m.name}你好～`:`${m.name}，最近还好吗？`;
-    if(w.objective==='greeting')return opening+'今天想到你，想跟你打个招呼。最近过得怎么样？有空再聊，祝你这周顺顺利利。';
-    if(w.objective==='preview')return opening+`想先给你看看一款在准备的「${p.product_name}」。我想到你之前喜欢偏清透、柔和的款式；如果想看颜色和效果，我可以先发张款式图给你。`;
-    if(w.objective==='balance')return opening+`你在店里还有 ${money(m.balance).replace('.00','')} 的可用余额，想做美甲或护理时可以按门店规则使用。`+`这款「${p.product_name}」和你之前喜欢的${m.preferred_styles.replaceAll('|','、')}比较接近，${shape}有兴趣的话我发图给你看看。`+'不用急着决定，想来时我们再一起确认服务和时间。';
+    const tone=WB_TONES[w.tone]||WB_TONES.friendly,brief=w.tone==='brief';
+    const opening=m.name+tone.greeting;
+    if(w.objective==='greeting')return opening+tone.checkIn;
+    if(w.objective==='preview'){
+      const preview=`「${p.product_name}」正在准备。`;
+      return opening+preview+(brief?'':`这款和你之前偏好的风格比较接近。`)+tone.offer;
+    }
+    if(w.objective==='balance'){
+      const balance=`你在店里还有 ${money(m.balance).replace('.00','')} 的可用余额。`;
+      const product=brief?`想看看「${p.product_name}」吗？`:`「${p.product_name}」和你之前喜欢的${m.preferred_styles.replaceAll('|','、')}比较接近。`;
+      return opening+balance+product+tone.offer;
+    }
     if(w.objective==='care'){
       const visit=careFollowupVisit(m),tags=memberCareIndex.get(m.member_id)?.care_need_tags||'';
-      let text=opening+(visit?`想问问你前几天做的「${visit.name}」，这几天佩戴还舒服吗？甲周和甲面状态怎么样？`:'想问问你上次做完美甲之后，甲周和甲面状态怎么样？');
-      text+=/干燥|保湿/.test(tags)?'平时可以留意一下甲缘的保湿。':tags.includes('翘边')?'如果有翘边或破损，可以先发张照片给我们看看，别自己撕扯。':tags.includes('卸甲')?'如果最近想卸甲或让甲面休息，可以先和我说说你的安排。':'有需要维护的地方，随时和我说。';
-      return text+`店里有「${p.product_name}」`+(soft?'，需要时我再给你介绍。':'，如果需要，可以一起看看是否适合。');
+      const service=visit?`上次做的「${visit.name}」`:'上次做的美甲';
+      if(brief)return opening+`${service}现在戴着还舒服吗？`+tone.care;
+      let text=opening+`想问问${service}现在佩戴还舒服吗？甲周和甲面状态怎么样？`;
+      if(/干燥|保湿/.test(tags))text+='平时可以留意一下甲缘的保湿。';
+      else if(tags.includes('翘边'))text+='如果有翘边或破损，可以先发张照片给我们看看，别自己撕扯。';
+      else if(tags.includes('卸甲'))text+='如果最近想卸甲或让甲面休息，可以先和我说说你的安排。';
+      return text+tone.care+`店里有「${p.product_name}」`+(soft?'，需要时我再给你介绍。':'，如果需要，可以一起看看是否适合。');
     }
+    if(brief)return opening+`可以看看「${p.product_name}」这款${p.style}美甲。`+tone.offer;
     let text=opening+(w.objective==='new_product'?'给你看看店里最近的款式。':m.lifecycle==='dormant'?'好久没见，想给你分享一个你可能会喜欢的款式。':'最近有想换个款式吗？');
     text+=`「${p.product_name}」是${p.style}风格，${shape}和你之前喜欢的${m.preferred_styles.replaceAll('|','、')}比较接近。`;
-    text+=w.tone==='brief'?'有兴趣的话我发图给你看看。':soft?'有兴趣就看看图，想来时再告诉我，我们一起看合适的时间。':'我把产品信息放在下面了，想来换款的话告诉我，我帮你看看合适的时间。';
+    text+=tone.offer;
     return text+(w.revision%2===0?' 有想调整的颜色或细节，也可以直接告诉我。':'');
   }
   function generateWorkbenchMessage(){
@@ -877,7 +900,7 @@
       <div class="field"><label for="task-message">参考话术 · 可修改</label><textarea id="task-message" name="message" maxlength="1600">${escape(draft.message??task.message)}</textarea></div>
       <p class="helper">${editing?'顾客后来回复或改变计划时，可以更新这项任务。历史反馈会保留，修改记录不代表再次联系。':'请用门店常用渠道联系顾客，联系后在这里登记反馈。'}</p>
       <div class="button-row"><button type="button" data-copy-task ${canContact?'':'disabled'}>复制话术</button><button type="button" data-task-studio="${task.task_id}">到话术工作台</button></div>
-      <div class="field"><label for="task-outcome">沟通结果</label><select id="task-outcome" name="outcome"><option value="">选择结果</option>${options(outcomes,draft.outcome)}</select></div>
+      <div class="field"><label for="task-outcome">沟通结果 <span class="task-field-required" aria-hidden="true">*</span></label><select id="task-outcome" name="outcome" aria-label="沟通结果（必填）" required><option value="">选择结果</option>${options(outcomes,draft.outcome)}</select><p class="task-field-error" id="task-outcome-error" role="alert" hidden>请选择沟通结果后再保存。</p></div>
       <div class="field"><label for="task-result-note">顾客反馈 <small>选填</small></label><textarea id="task-result-note" name="note" maxlength="500" placeholder="例如想周末来做裸色款，已确认时间">${escape(draft.note||'')}</textarea></div>
       <section class="task-form-plan" data-follow-up-fields ${draft.outcome==='不再营销'?'hidden':''}>
         <h3>下一步</h3>
@@ -1582,10 +1605,26 @@
       else if(button.dataset.task) {ui.task=button.dataset.task;render();}
     } catch(error) {notify(error.message,true);}
   });
+  function setOutcomeError(select, show) {
+    const picker=document.getElementById('task-outcome-picker');
+    select.form.querySelector('#task-outcome-error').hidden=!show;
+    for(const field of [select,picker].filter(Boolean)){
+      field.setAttribute('aria-invalid',String(show));
+      if(show)field.setAttribute('aria-describedby','task-outcome-error');
+      else field.removeAttribute('aria-describedby');
+    }
+    if(show)(picker||select).focus();
+  }
+  content.addEventListener('invalid',event=>{
+    if(event.target.id!=='task-outcome'||!event.target.validity.valueMissing)return;
+    event.preventDefault();
+    setOutcomeError(event.target,true);
+  },true);
   content.addEventListener('change',event => {
     const target=event.target;
     if(target.id==='task-outcome'){
       const form=target.form;
+      if(target.value)setOutcomeError(target,false);
       form.querySelector('[data-appointment-fields]').hidden=target.value!=='已预约';
       form.querySelector('[data-follow-up-fields]').hidden=target.value==='不再营销';
     }
@@ -1627,6 +1666,10 @@
     if(!['dispatch-form','reassign-form','task-result-form','employee-account-form','employee-note-form'].includes(form.id))return;
     event.preventDefault();
     const data=new FormData(form),button=event.submitter;
+    if(form.id==='task-result-form'&&!data.get('outcome')){
+      setOutcomeError(form.elements.outcome,true);
+      return;
+    }
     if(button?.disabled)return;
     if(button)button.disabled=true;
     try{

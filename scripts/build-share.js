@@ -15,7 +15,7 @@ const safeScript = text => text.replace(/<\/script/gi, '<\\/script');
 const scripts = [
     `<script id="nailmate-data" type="application/json">${safeScript(fs.readFileSync(path.join(root, 'data', 'team-data.json'), 'utf8'))}</script>`,
     `<script id="nailmate-product-images" type="application/json">${safeScript(read('team-product-images.json'))}</script>`,
-    ...['team-store.js', 'team-chart.js', 'team-workspace.js'].map(file => `<script>${safeScript(read(file))}</script>`),
+    ...['communication.js', 'team-store.js', 'team-chart.js', 'team-workspace.js'].map(file => `<script>${safeScript(read(file))}</script>`),
 ].join('\n');
 const output = path.resolve(process.argv[2] || path.join(root, 'NailMate_AI_微信分享版.html'));
 fs.writeFileSync(output, html.replace('</body>', () => scripts + '\n</body>'));

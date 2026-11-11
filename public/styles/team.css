@@ -259,6 +259,7 @@ th{font-size:13px}
 .profile-preferences dt,.profile-checks{font-size:13px;line-height:1.85}
 .profile-note{padding-block:17px}
 .profile-note-meta{font-size:12px;line-height:1.8}
+.member-sheet .profile-note-meta>span{font-size:17px;font-weight:600;color:var(--ink);line-height:1.55}
 .profile-note-form label,.profile-note-form textarea{font-size:15px}
 .profile-note-form .helper{font-size:13px}
 .profile-note-toolbar button,.profile-actions button,.member-text-button{font-size:13px}
@@ -992,6 +993,10 @@ summary > .glass-control-face {
 .task-plan dt {font-weight:700}
 .task-plan dd {margin:0;overflow-wrap:anywhere}
 .task-form-plan {padding:16px 0 9px;margin-top:14px;border-top:1px solid var(--line)}
+.task-field-required,.task-field-error{color:#a02b45}
+.task-field-required{font-weight:700}
+.task-field-error{margin:6px 0 0;font-size:13px}
+#task-outcome[aria-invalid=true],#task-outcome-picker[aria-invalid=true]{border-color:#a02b45}
 .task-form-plan h3 {font-size:16px;margin:0 0 12px}
 .task-form-grid {display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:12px}
 .task-form-grid .field {min-width:0;margin-bottom:5px}
