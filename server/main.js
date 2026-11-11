@@ -28,6 +28,9 @@ function requireCondition(condition, status, message) {
 function createApp(pool, options = {}) {
     const app = express();
     app.disable('x-powered-by');
+    const auth = require('./team-auth').registerTeamAuth(app, pool);
+    require('./team-routes').registerTeamRoutes(app, pool, auth);
+    app.use('/api', auth.ownerOnly);
     const { registerImageRoutes, registerCopyRoutes } = require('./copy-routes');
     registerImageRoutes(app, pool);
     app.use('/api', express.json({ limit: '16kb' }));
@@ -310,6 +313,7 @@ function createApp(pool, options = {}) {
     );
 
     app.use('/api', (_req, res) => res.status(404).json({ error: '接口不存在' }));
+    app.get('/legacy.html', auth.ownerOnly);
     app.use(express.static(path.join(__dirname, '..', 'public')));
     app.use((error, _req, res, _next) => {
         if (error.apiStatus) return res.status(error.apiStatus).json({ error: error.message });
@@ -328,6 +332,7 @@ async function start() {
     try {
         const state = await transaction(pool, store.state, 'Shared');
         if (!state.members.length) throw new Error('会员数据为空，请先运行 npm run db:init');
+        await transaction(pool, require('./team-auth').initializeTeamAuth);
     } catch (error) {
         await pool.close();
         throw new Error('数据库尚未就绪，请检查连接并运行 npm run db:init。' + error.message);

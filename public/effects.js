@@ -1,7 +1,7 @@
 import { state } from './state.js';
+import { CARE_FOLLOWUP_DAY } from './rules-client.js';
 import { escapeHtml as escape } from './components.js';
 const content = document.getElementById('content');
-const CARE_FOLLOWUP_DAYS = 7;
 const hoverMotion = matchMedia(
     '(any-hover: hover) and (any-pointer: fine) and (prefers-reduced-motion: no-preference)',
 );
@@ -95,7 +95,7 @@ const objectiveChoiceHints = {
     repurchase: '询问是否想换款或预约',
     balance: '提醒店内可用余额',
     launch: '分享符合她偏好的新款',
-    care: `美甲后第 1–${CARE_FOLLOWUP_DAYS} 天，问佩戴体验`,
+    care: `最近一次美甲后第 ${CARE_FOLLOWUP_DAY} 天提醒`,
     preview: '分享快要上架、顾客可能喜欢的款式',
     scheduled: '按店主记下的日期回访',
     greeting: '聊近况，维护日常关系',

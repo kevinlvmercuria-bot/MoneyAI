@@ -5,3 +5,32 @@ node_modules/
 *.log
 coverage/
 /codex-artifacts/
+/.playwright-cli/
+/backups/
+
+# Local databases and backup media
+*.bak
+*.trn
+*.bacpac
+*.mdf
+*.ldf
+*.dump
+*.db
+*.db-journal
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
+
+# Local credentials and temporary files
+*.pem
+*.key
+*.pfx
+*.p12
+*.dpapi
+*.tmp
+
+# Local demo exports and generated previews
+/data/team-data.json
+/MoneyAI-preview.html
+/NailMate_AI_微信分享版.html

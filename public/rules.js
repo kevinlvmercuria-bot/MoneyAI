@@ -3,6 +3,7 @@ const NailMateRules = (() => {
 
     const MAX_TASKS_PER_ANALYSIS = 5;
     const DEMO_DATE = '2026-11-07';
+    const CARE_FOLLOWUP_DAY = 21;
     const CARE_OUTCOMES = ['已沟通', '未回复', '暂不联系', '推荐不合适', '不再营销'];
     const PRODUCTS = [
         { id: 'P001', name: '奶油法式·初雪', style: '法式', price: 168 },
@@ -215,8 +216,7 @@ const NailMateRules = (() => {
         if (opportunity === 'care')
             return Boolean(
                 member.recentNailVisit &&
-                    member.recentNailVisit.days >= 1 &&
-                    member.recentNailVisit.days <= 7 &&
+                    member.recentNailVisit.days === CARE_FOLLOWUP_DAY &&
                     member.careProfile?.optIn === true,
             );
         if (opportunity === 'preview') return matchingPreviews(member, products).length > 0;
@@ -360,7 +360,7 @@ const NailMateRules = (() => {
             const visit = member.recentNailVisit;
             return visit
                 ? `${visit.date} 做了「${visit.name}」 · 已过 ${visit.days} 天 · 已同意回访，先询问佩戴体验`
-                : '暂无服务后 1–7 天的美甲订单';
+                : '暂无美甲服务记录';
         }
         if (objective === 'balance')
             return `${member.days} 天未到店 · 储值余额 ${money(member.bal)} · 先提醒已有权益`;
@@ -414,6 +414,7 @@ const NailMateRules = (() => {
         DEMO_SERVICE_PRICE,
         MAX_TASKS_PER_ANALYSIS,
         DEMO_DATE,
+        CARE_FOLLOWUP_DAY,
         CARE_OUTCOMES,
         money,
         canContact,

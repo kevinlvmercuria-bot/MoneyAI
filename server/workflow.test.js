@@ -5,6 +5,7 @@ const assert = require('node:assert/strict');
 const { randomBytes } = require('node:crypto');
 const { connect, transaction } = require('./db');
 const { createApp } = require('./main');
+const { authenticate } = require('./test-auth-client');
 const { initialize } = require('../database/setup');
 const { importSource, readSource, mapMembers } = require('../database/import-source');
 const aiCopy = require('./ai-copy');
@@ -44,11 +45,12 @@ test('SQL Server 最小业务闭环验收', { timeout: 90000 }, async (t) => {
             server.once('error', reject);
         });
         const base = 'http://127.0.0.1:' + server.address().port;
-        const post = (path, body) => fetch(base + '/api' + path, {
+        const request = await authenticate(base, 'setup');
+        const post = (path, body) => request(base + '/api' + path, {
             method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
         });
         const state = async () => {
-            const response = await fetch(base + '/api/state');
+            const response = await request(base + '/api/state');
             assert.equal(response.status, 200);
             return response.json();
         };
@@ -58,7 +60,7 @@ test('SQL Server 最小业务闭环验收', { timeout: 90000 }, async (t) => {
             const current = await state();
             assert.equal(current.members.length, 2800);
             assert.equal(current.tasks.length, 1);
-            const html = await (await fetch(base)).text();
+            const html = await (await request(base)).text();
             assert.match(html, /workspace.js/);
             assert.match(html, /type="module"\s+src="workspace.js"/);
             assert.equal(require('./index').start, require('./main').start);
@@ -90,7 +92,7 @@ test('SQL Server 最小业务闭环验收', { timeout: 90000 }, async (t) => {
             assert.equal((await post('/tasks', {goal:'balance',memberIds:[candidate.id,candidate.id]})).status, 400);
             assert.equal((await post('/tasks', {goal:'unknown',memberIds:[candidate.id]})).status, 400);
             assert.equal((await post('/tasks', null)).status, 400);
-            const malformed = await fetch(base + '/api/tasks', {
+            const malformed = await request(base + '/api/tasks', {
                 method:'POST',headers:{'Content-Type':'application/json'},body:'{invalid',
             });
             assert.equal(malformed.status, 400);
@@ -256,13 +258,13 @@ test('SQL Server 最小业务闭环验收', { timeout: 90000 }, async (t) => {
         });
 
         await t.test('会员历史接口及导入目录的新产品用于实际任务', async () => {
-            const details = await fetch(base + '/api/members/M0001/details');
+            const details = await request(base + '/api/members/M0001/details');
             assert.equal(details.status, 200);
             const history = await details.json();
             assert.ok(history.orders.length > 0 && history.orders.length <= 10);
             assert.ok(history.notes.length > 0);
             assert.equal(history.careProfile.member_id, 'M0001');
-            assert.equal((await fetch(base + '/api/members/M9999/details')).status, 404);
+            assert.equal((await request(base + '/api/members/M9999/details')).status, 404);
             const current = await state();
             const candidate = goalCandidates(current.members, current.tasks, 'launch', current.products)[0];
             assert.ok(candidate);
@@ -284,7 +286,7 @@ test('SQL Server 最小业务闭环验收', { timeout: 90000 }, async (t) => {
                 if(opportunity==='scheduled'){assert.equal(candidates.length,0);continue;}
                 assert.ok(candidates.length>0);
                 assert.ok(candidates.every(member=>canContact(member)&&matchesOpportunity(member,opportunity,current.products)));
-                if (opportunity === 'care') assert.ok(candidates.every(member=>member.careProfile.optIn&&member.recentNailVisit.days>=1&&member.recentNailVisit.days<=7));
+                if (opportunity === 'care') assert.ok(candidates.every(member=>member.careProfile.optIn&&member.recentNailVisit.days===21));
                 const response = await post('/tasks', { opportunity, memberIds: candidates.slice(0, 2).map((member) => member.id) });
                 assert.equal(response.status, 200);
                 const result = await response.json();
@@ -361,7 +363,7 @@ test('SQL Server 最小业务闭环验收', { timeout: 90000 }, async (t) => {
         await t.test('产品图片绑定、下载与替换，拒绝伪装及超限图片', async () => {
             const draft = (await state()).copyDrafts.find((draft)=>draft.id===draftId);
             const productId = draft.productIds[0];
-            const upload = (id,data=png) => fetch(base+'/api/products/'+id+'/image',{
+            const upload = (id,data=png) => request(base+'/api/products/'+id+'/image',{
                 method:'POST',headers:{'Content-Type':'image/png'},body:data,
             });
             assert.equal((await upload(productId,Buffer.from('this is not a png image'))).status,400);
@@ -369,13 +371,13 @@ test('SQL Server 最小业务闭环验收', { timeout: 90000 }, async (t) => {
             assert.equal((await upload(productId,Buffer.alloc(5*1024*1024+1))).status,413);
             assert.equal((await upload(productId)).status,200);
             imageUrl = (await state()).products.find((product)=>product.id===productId).imageUrl;
-            const image = await fetch(base+imageUrl+'?download=1');
+            const image = await request(base+imageUrl+'?download=1');
             assert.equal(image.status,200);
             assert.match(image.headers.get('content-disposition'),/attachment/);
             assert.deepEqual(Buffer.from(await image.arrayBuffer()),png);
             assert.equal((await upload(productId)).status,200);
             assert.notEqual((await state()).products.find((product)=>product.id===productId).imageUrl,imageUrl);
-            assert.equal((await fetch(base+imageUrl)).status,200);
+            assert.equal((await request(base+imageUrl)).status,200);
         });
 
         await t.test('修改与复制单独记录，不改变任务结果和联系冷却', async () => {
@@ -395,7 +397,7 @@ test('SQL Server 最小业务闭环验收', { timeout: 90000 }, async (t) => {
             assert.equal((await post('/copy/'+draftId+'/copied',{message:'店主修改 <邀请看图>'})).status,409);
             assert.equal((await post('/reset',{})).status,200);
             assert.deepEqual((await state()).copyDrafts,[]);
-            assert.equal((await fetch(base+imageUrl)).status,200);
+            assert.equal((await request(base+imageUrl)).status,200);
         });
     } finally {
         if (server) {

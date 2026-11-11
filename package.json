@@ -14,7 +14,9 @@
     "check": "node scripts/check.js",
     "test:legacy": "node --test server/app.test.js",
     "db:import": "node database/import-source.js",
-    "db:personality-notes": "node database/personality-notes.js"
+    "db:personality-notes": "node database/personality-notes.js",
+    "build:share": "node scripts/build-share.js",
+    "test:team": "node --test server/team.test.js"
   },
   "dependencies": {
     "dotenv": "18.0.9",
