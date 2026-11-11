@@ -9,11 +9,23 @@ const TEAM_APPOINTMENT_LABELS = {
     scheduled: '待到店', rescheduled: '已改期', visited: '已到店', no_show: '未到店',
 };
 
-const TEAM_CARE_FOLLOWUP_DAY = 21;
+const TEAM_CARE_START_DAY = 7;
+const TEAM_CARE_LAST_NURSING_DAY = 28;
+const TEAM_CARE_LAST_DAY = 45;
 
 function teamCareFollowupDate(visitDate) {
     if (!teamValidDate(visitDate)) return '';
-    return new Date(Date.parse(visitDate) + TEAM_CARE_FOLLOWUP_DAY * 86400000).toISOString().slice(0, 10);
+    return new Date(Date.parse(visitDate) + TEAM_CARE_START_DAY * 86400000).toISOString().slice(0, 10);
+}
+
+function teamCarePhase(days) {
+    if (!Number.isFinite(days) || days < TEAM_CARE_START_DAY || days > TEAM_CARE_LAST_DAY) return null;
+    return days <= TEAM_CARE_LAST_NURSING_DAY ? 'care' : 'removal';
+}
+
+function teamCareProductMatches(product, phase) {
+    const removal = product?.product_type === 'care_service' && product.product_name?.includes('卸甲');
+    return phase === 'removal' ? Boolean(removal) : Boolean(product && product.product_type !== 'nail_style' && !removal);
 }
 
 function teamLatestCompletedNails(snapshot, date) {
@@ -190,10 +202,12 @@ function teamTodoReasons(task, date) {
         const order = latest.get(reminder.member_id);
         const current = order?.order_id === reminder.service_order_id;
         const due = current ? teamCareFollowupDate(order.completed_on) : reminder.due_on;
-        const status = !current ? 'superseded'
-          : reminder.status === 'superseded' || due > clock.date ? 'pending' : reminder.status;
         const completed = current ? order.completed_on : reminder.completed_on;
-        if (status === reminder.status && completed === reminder.completed_on) continue;
+        let status = reminder.status;
+        if (!current) status = 'superseded';
+        else if (status === 'assigned' && due > clock.date) status = 'pending';
+        else if (status !== 'assigned') status = teamDaysBetween(clock.date, completed) > TEAM_CARE_LAST_DAY ? 'expired' : 'pending';
+        if (status === reminder.status && completed === reminder.completed_on && due === reminder.due_on) continue;
         const task = tasks.get(reminder.task_id);
         if (reminder.status === 'assigned' && task) {
           if (status !== 'assigned') {
@@ -201,17 +215,17 @@ function teamTodoReasons(task, date) {
             task.history.push(`${current ? '服务完成日期已更正，等待重新到期' : '对应服务已失效或有更新的美甲完成记录'} · ${clock.date}`);
           } else {
             task.care_due_on = due;
-            task.history.push(`已校正本次回访的服务完成日期 · ${clock.date}`);
+            task.history.push(`已更新本次回访的开始日期 · ${clock.date}`);
           }
         }
-        if (status === 'pending') reminder.task_id = null;
+        if (status === 'pending' || status === 'expired') reminder.task_id = null;
         Object.assign(reminder, { status, due_on: due, completed_on: completed, updated_at: clock.utc });
         changed = true;
       }
       for (const order of latest.values()) {
         if (!careProfiles.get(order.member_id)?.care_followup_opt_in) continue;
         const due = teamCareFollowupDate(order.completed_on);
-        if (due > clock.date) continue;
+        if (!teamCarePhase(teamDaysBetween(clock.date, order.completed_on))) continue;
         const identity = { member_id: order.member_id, service_order_id: order.order_id };
         if (keys.has(teamCareReminderKey(identity))) continue;
         next.careReminders.push({ ...identity, completed_on: order.completed_on, due_on: due, status: 'pending',
@@ -388,15 +402,19 @@ function teamTodoReasons(task, date) {
             requireCondition(input.objective === 'greeting' ? productId === null : Boolean(product && (input.objective === 'preview' || product.is_active)), 400, '请选择有效的产品。');
             const reminder = input.objective === 'care' ? next.careReminders.find(row =>
               row.member_id === input.member_id && row.service_order_id === input.service_order_id) : null;
-            if (input.objective === 'care')
-              requireCondition(reminder?.status === 'pending' && reminder.due_on <= date,
-                409, '护理回访需满第 21 天且仍待分派，请刷新回访名单。');
+            const carePhase = reminder && teamCarePhase(teamDaysBetween(date, reminder.completed_on));
+            if (input.objective === 'care') {
+              requireCondition(reminder?.status === 'pending' && carePhase,
+                409, '护理回访仅限服务完成后第 7–45 天且仍待分派，请刷新回访名单。');
+              requireCondition((input.care_action == null || input.care_action === carePhase) && teamCareProductMatches(product, carePhase),
+                409, '当前回访阶段与所选服务不符，请刷新并按最新建议重新选择。');
+            }
             const reasons = checkContact(next, input.member_id, input.objective, productId, date);
             if (next.memberUpdates[input.member_id]?.last_handled_on === date) reasons.push('今天已有沟通记录');
             requireCondition(!reasons.length, 409, `暂不可分派：${reasons.join('、')}。`);
             const id = 'T' + String(next.tasks.length + 1).padStart(4, '0');
             next.tasks.push({ task_id: id, member_id: input.member_id, objective: input.objective, strategy: objectives.get(input.objective),
-              ...(reminder && { care_service_order_id: reminder.service_order_id, care_due_on: reminder.due_on }),
+              ...(reminder && { care_service_order_id: reminder.service_order_id, care_due_on: reminder.due_on, care_action: carePhase }),
               assignee: input.assignee, product_id: productId, assigned_on: date, assigned_at: utc, assigned_by: account.username || '老板娘',
               note: field(input.note, 180), reason: field(input.reason, 1200),
               message: field(input.message, 1600, true), status: 'assigned', result: null, history: [`老板娘分派给 ${input.assignee} · ${date}`],
@@ -525,4 +543,4 @@ function teamTodoReasons(task, date) {
     return { roster, scopedState, applyAction, refreshCareReminders, listAccounts: () => store.accounts.map(({ employee, username }) => ({ employee, username })), exportState: () => structuredClone(store) };
   }
 
-if (typeof module !== 'undefined') module.exports = { createTeamStore, teamBusinessClock, teamCalendarTime, teamTodoReasons, teamAppointmentPending, teamTaskNeedsHandoff, teamCareReminderKey, teamMemberRecency };
+if (typeof module !== 'undefined') module.exports = { createTeamStore, teamBusinessClock, teamCalendarTime, teamTodoReasons, teamAppointmentPending, teamTaskNeedsHandoff, teamCareReminderKey, teamMemberRecency, teamCarePhase };

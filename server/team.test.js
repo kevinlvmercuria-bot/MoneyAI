@@ -5,7 +5,7 @@ const assert = require('node:assert/strict');
 const { randomBytes } = require('node:crypto');
 const { authenticate } = require('./test-auth-client');
 const snapshot = require('../data/team-data.json');
-const { createTeamStore, teamBusinessClock, teamMemberRecency, teamTodoReasons } = require('../public/team-store');
+const { createTeamStore, teamBusinessClock, teamMemberRecency, teamTodoReasons, teamCarePhase } = require('../public/team-store');
 const { teamChartStages, teamChartTaskGroups, teamResultChart } = require('../public/team-chart');
 const owner = { role: 'owner', employee: '' };
 const eligible = snapshot.members.filter(m => m.marketing_consent && !m.unresolved_complaint && !m.has_upcoming_appointment && m.data_completeness >= .8 &&
@@ -164,35 +164,53 @@ test('旧反馈使用实际 UTC 审计时间恢复冷却口径，保留原始历
     assert.throws(() => restarted.applyAction(owner, { action: 'assign', tasks }), /14 天内已联系/);
 });
 
-test('护理回访满 21 个北京时间自然日到期，未分派时跨日保留', () => {
+test('护理回访按北京时间在第 7–28 天建议护理，第 29–45 天建议卸甲', () => {
     const member = eligible[0];
-    const earlier = { member_id: member.member_id, order_type: 'nail_service', order_date: '2026-10-21', order_id: 'order-early', data_type: 'simulation' };
-    const recent = { ...earlier, order_date: '2026-10-22', order_id: 'order-recent' };
+    const earlier = { member_id: member.member_id, order_type: 'nail_service', order_date: '2026-10-31', order_id: 'order-early', data_type: 'simulation' };
+    const recent = { ...earlier, order_date: '2026-11-01', order_id: 'order-recent' };
     const fixture = {
         ...snapshot,
         orders: [recent, earlier, { ...recent, order_type: 'care_product', order_date: '2026-11-01' }],
         member_care_profiles: [{ member_id: member.member_id, care_followup_opt_in: true }],
     };
-    let now = new Date('2026-11-11T15:59:00Z');
+    assert.deepEqual([6, 7, 28, 29, 45, 46].map(teamCarePhase), [null, 'care', 'care', 'removal', 'removal', null]);
+    let now = new Date('2026-11-07T15:59:00Z');
     const engine = createTeamStore(fixture, { now: () => now });
     const [input] = assignment(engine);
     input.objective = 'care';
     input.service_order_id = recent.order_id;
     input.product_id = snapshot.products.find(product => product.is_active && product.product_type === 'care_service').product_id;
+    input.care_action = 'care';
     const assign = () => engine.applyAction(owner, { action: 'assign', tasks: [input] });
-    assert.throws(assign, /第 21 天/);
+    assert.throws(assign, /第 7–45 天/);
 
-    now = new Date('2026-11-11T16:00:00Z');
+    now = new Date('2026-11-07T16:00:00Z');
     assert.equal(engine.refreshCareReminders(), true);
+    assert.equal(engine.scopedState(owner).careReminders[0].due_on, '2026-11-08');
     assert.equal(engine.scopedState(owner).careReminders[0].status, 'pending');
-    now = new Date('2026-11-12T16:00:00Z');
+    now = new Date('2026-11-29T16:00:00Z');
     assert.equal(engine.refreshCareReminders(), false);
+    assert.throws(assign, /阶段与所选服务不符/);
+    input.care_action = 'removal';
+    assert.throws(assign, /阶段与所选服务不符/);
+    input.product_id = snapshot.products.find(product => product.product_name === '温和卸甲护理').product_id;
+    now = new Date('2026-12-15T16:00:00Z');
+    const unassigned = engine.exportState();
     const { taskIds: [id] } = assign();
+    assert.equal(engine.scopedState(owner).tasks[0].care_action, 'removal');
     const employee = { role: 'employee', employee: input.assignee };
+    now = new Date('2026-12-16T16:00:00Z');
+    assert.equal(engine.refreshCareReminders(), false, '已分派任务仍可登记结果');
+    const skipped = createTeamStore(fixture, { now: () => now });
+    assert.equal(skipped.refreshCareReminders(), false, '跳过整个窗口的订单不补建提醒');
+    const expired = createTeamStore(fixture, { now: () => now, initialState: unassigned });
+    assert.equal(expired.refreshCareReminders(), true);
+    assert.equal(expired.scopedState(owner).careReminders[0].status, 'expired');
+    assert.throws(() => expired.applyAction(owner, { action: 'assign', tasks: [input] }), /第 7–45 天/);
     const result = engine.applyAction(employee, { action: 'result', id, outcome: '已沟通', note: '', message: '' });
     assert.equal(result.state.tasks[0].status, 'recorded');
     assert.equal(engine.scopedState(owner).careReminders[0].status, 'processed');
-    assert.throws(assign, /第 21 天/);
+    assert.throws(assign, /第 7–45 天/);
 });
 
 test('真实顾客只有确认完成且带完成日的美甲服务可以产生回访', () => {
@@ -280,7 +298,7 @@ test('SQL 护理回访补算、唯一性、原子分派及订单状态变更', {
         { ...services[0], order_id: 'fixture-care-product', order_type: 'care_product', completed_on: '2026-11-18' },
     ], appointments: [{ member_id: c.member_id, status: 'scheduled', appointment_date: '2026-11-30' }],
     member_care_profiles: [a, b, c].map(member => ({ member_id: member.member_id, care_followup_opt_in: true })) };
-    let now = new Date('2026-11-21T15:59:59Z');
+    let now = new Date('2026-11-07T15:59:59Z');
     let created = false, pool, server, base;
     const postTo = request => body => request(base + '/api/team', {
         method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
@@ -304,17 +322,17 @@ test('SQL 护理回访补算、唯一性、原子分派及订单状态变更', {
         let post = postTo(await authenticate(base, 'setup'));
         const read = async () => (await (await post({ action: 'bootstrap' })).json()).state;
         const before = await read();
-        assert.deepEqual(before.careReminders, [], '第 20 天没有提醒');
+        assert.deepEqual(before.careReminders, [], '第 6 天没有提醒');
         const employee = before.accounts[0].employee;
         const credentials = { username: 'care-worker', password: 'care-worker-fixture' };
         assert.equal((await post({ action: 'employeeAccount', employee, ...credentials })).status, 200);
         let employeePost = postTo(await authenticate(base, 'login', credentials));
 
-        now = new Date('2026-11-21T16:00:00Z');
+        now = new Date('2026-11-07T16:00:00Z');
         const scans = await Promise.all([read(), read()]);
         assert.deepEqual(scans[0].careReminders, scans[1].careReminders);
-        assert.equal(scans[0].careReminders.length, 3, '第 21 天到期，取消及未完成订单不会覆盖有效订单');
-        assert.ok(scans[0].careReminders.every(row => row.due_on === '2026-11-22' && row.status === 'pending' && row.data_type === 'simulation'));
+        assert.equal(scans[0].careReminders.length, 3, '第 7 天进入，取消及未完成订单不会覆盖有效订单');
+        assert.ok(scans[0].careReminders.every(row => row.due_on === '2026-11-08' && row.status === 'pending' && row.data_type === 'simulation'));
         const rows = () => pool.request().query('SELECT * FROM dbo.TeamCareReminders').then(result => result.recordset);
         assert.equal((await rows()).length, 3);
         await assert.rejects(pool.request().query(`
@@ -327,11 +345,11 @@ test('SQL 护理回访补算、唯一性、原子分派及订单状态变更', {
 
         await new Promise(resolve => server.close(resolve));
         server = null;
-        now = new Date('2026-11-22T16:00:00Z');
+        now = new Date('2026-11-08T16:00:00Z');
         await start();
         post = postTo(await authenticate(base, 'login'));
         employeePost = postTo(await authenticate(base, 'login', credentials));
-        assert.deepEqual((await read()).careReminders, scans[0].careReminders, '重启后第 22 天仍可分派');
+        assert.deepEqual((await read()).careReminders, scans[0].careReminders, '重启后第 8 天仍可分派');
         const product_id = fixture.products.find(product => product.is_active && product.product_type === 'care_service').product_id;
         const assign = (service, fields = {}) => ({ action: 'assign', tasks: [{
             member_id: service.member_id, objective: 'care', service_order_id: service.order_id,
@@ -348,23 +366,26 @@ test('SQL 护理回访补算、唯一性、原子分派及订单状态变更', {
         const employeeAfter = (await (await employeePost({ action: 'bootstrap' })).json()).state;
         assert.deepEqual(employeeAfter.tasks.map(task => task.task_id), [taskId]);
         assert.equal((await employeePost({ action: 'result', id: taskId, outcome: '已预约',
-            note: '对应维护预约', message: '', appointmentAt: '2026-11-23T12:00' })).status, 200);
+            note: '对应维护预约', message: '', appointmentAt: '2026-11-09T12:00' })).status, 200);
         assert.equal((await read()).careReminders.find(row => row.member_id === a.member_id).status, 'booked');
         assert.equal((await post(request)).status, 409);
 
         services[1].completed_on = '2026-11-03';
-        assert.equal((await read()).careReminders.find(row => row.member_id === b.member_id).due_on, '2026-11-24');
+        assert.equal((await read()).careReminders.find(row => row.member_id === b.member_id).due_on, '2026-11-10');
         assert.equal((await post(assign(services[1]))).status, 409);
-        now = new Date('2026-11-23T16:00:00Z');
+        now = new Date('2026-11-09T16:00:00Z');
         const second = await (await post(assign(services[1]))).json();
         assert.equal(second.taskIds.length, 1);
-        fixture.orders.push({ ...services[1], order_id: 'new-valid-service', completed_on: '2026-11-24' });
+        fixture.orders.push({ ...services[1], order_id: 'new-valid-service', completed_on: '2026-11-10' });
         const refreshed = await read();
         assert.equal(refreshed.careReminders.find(row => row.member_id === b.member_id).status, 'superseded');
         assert.equal(refreshed.tasks.find(task => task.task_id === second.taskIds[0]).status, 'archived');
         assert.equal((await employeePost({ action: 'result', id: second.taskIds[0], outcome: '已沟通', note: '', message: '' })).status, 409);
-        now = new Date('2026-12-14T16:00:00Z');
-        assert.equal((await read()).careReminders.find(row => row.service_order_id === 'new-valid-service').status, 'pending');
+        now = new Date('2026-12-16T16:00:00Z');
+        const later = (await read()).careReminders;
+        assert.equal(later.find(row => row.service_order_id === 'new-valid-service').status, 'pending');
+        assert.equal(later.find(row => row.member_id === c.member_id).status, 'expired');
+        assert.equal(later.find(row => row.member_id === a.member_id).status, 'booked');
         assert.equal((await rows()).length, 4);
     } finally {
         if (server) await new Promise(resolve => server.close(resolve));
