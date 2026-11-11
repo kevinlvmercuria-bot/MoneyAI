@@ -37,6 +37,10 @@
     :JSON.parse(document.getElementById('nailmate-data').textContent);
   const PRODUCT_IMAGES=serverMode?(initial?await fetchJson('/team-product-images.json'):{}):JSON.parse(document.getElementById('nailmate-product-images').textContent);
   const preview=serverMode?null:createTeamStore(DATA,{storage:localStorage});
+  function previewState(account){
+    preview.refreshCareReminders();
+    return preview.scopedState(account);
+  }
   const PREVIEW_ROLE=document.getElementById('preview-role');
   const STAFF=[];
   const employeePages=['campaigns','products','studio'];
@@ -48,7 +52,8 @@
   const LABELS = {active:'活跃',due:'待复购',low_frequency:'低频',dormant:'沉睡'};
   const STATUSES = {assigned:'待联系',recorded:'已记录',archived:'已归档',executed_simulated:'历史模拟记录'};
   const OUTCOMES = ['未回复','有意向','已预约','已沟通','暂不联系','不再营销'];
-  let baseMembers,memberNoteIndex,memberOrderIndex,servicesByMember,memberCareIndex,memberProductIndex,recentNailVisits,scheduledAppointments;
+  let baseMembers,memberNoteIndex,memberOrderIndex,servicesByMember,memberCareIndex,memberProductIndex,scheduledAppointments;
+  let recentNailVisits=new Map(),pendingCare=new Map();
   function indexSnapshot(data) {
     DATA=data;
     baseMembers=data.members.map(m=>({...m,name:m.display_name,cycle:m.average_cycle_days,
@@ -61,14 +66,6 @@
     servicesByMember=bucketMemberRows(data.orders.filter(order=>order.order_type==='nail_service'));
     memberCareIndex=new Map(data.member_care_profiles.map(row=>[row.member_id,row]));
     memberProductIndex=new Map(data.products.map(row=>[row.product_id,row]));
-    recentNailVisits=new Map();
-    for(const order of data.orders) {
-      if(order.order_type!=='nail_service'||order.order_date>AS_OF)continue;
-      const previous=recentNailVisits.get(order.member_id);
-      if(previous&&previous.date>=order.order_date)continue;
-      const product=memberProductIndex.get(order.product_id);
-      recentNailVisits.set(order.member_id,{date:order.order_date,name:product?.product_name||order.style||'美甲服务'});
-    }
   }
   indexSnapshot(DATA);
   function emptyState(){return {members:[],tasks:[],notes:[],noteEdits:{},images:{},memberUpdates:{},accounts:[],logs:[],care_records:[],workDate:AS_OF,revision:0};}
@@ -77,6 +74,12 @@
     if(serverMode&&(shared.revision<state.revision
       || (shared.revision===state.revision&&shared.calendarDate<state.calendarDate)))return false;
     if(snapshot)indexSnapshot(snapshot);
+    // Older account servers supply simulation rows without the snapshot marker
+    // in the employee response. The server still validates all assignments.
+    recentNailVisits=teamLatestCompletedNails({...DATA,data_type:DATA.data_type??'simulation'},shared.calendarDate);
+    pendingCare=new Map((shared.careReminders||[])
+      .filter(row=>row.status==='pending'&&row.due_on<=shared.calendarDate)
+      .map(row=>[row.member_id,row]));
     const ids=new Set(shared.tasks.map(task=>task.member_id));
     const visibleMembers=USER.role==='employee'?baseMembers.filter(m=>ids.has(m.member_id)):baseMembers;
     WORK_DATE=shared.workDate;
@@ -96,7 +99,7 @@
     if(initial)applyState(initial.state);
   } else {
     sharedAccounts=preview.listAccounts();
-    if(USER.role!=='guest')applyState(preview.scopedState(USER));
+    if(USER.role!=='guest')applyState(previewState(USER));
   }
   const pageNames=['dashboard','members','campaigns','reports','products','studio','accounts'];
   const requestedPage=serverMode?new URLSearchParams(location.search).get('view'):null;
@@ -199,7 +202,13 @@
   }
   function careFollowupVisit(m) {
     const visit=recentNailVisits.get(m.member_id);
-    return visit ? {...visit,days:daysBetween(state.calendarDate,visit.date)} : null;
+    if(!visit)return null;
+    return {date:visit.completed_on,days:daysBetween(state.calendarDate,visit.completed_on),
+      name:memberProductIndex.get(visit.product_id)?.product_name||visit.style||'美甲服务'};
+  }
+  function careReady(m) {
+    return Array.isArray(state.careReminders) ? pendingCare.has(m.member_id)
+      : teamCareFollowupDate(recentNailVisits.get(m.member_id)?.completed_on)===state.calendarDate;
   }
   function bucketMemberRows(rows){const map=new Map();for(const row of rows){if(!map.has(row.member_id))map.set(row.member_id,[]);map.get(row.member_id).push(row)}return map}
   function profileNotes(id){
@@ -214,8 +223,7 @@
     if(m.data_completeness<.8)rows.push('档案完整度不足');
     if(objective==='care'){
       if(!memberCareIndex.get(m.member_id)?.care_followup_opt_in)rows.push('未同意护理跟进');
-      if(!assigned&&!teamCareFollowupDue(recentNailVisits.get(m.member_id)?.date,state.calendarDate))
-        rows.push(`仅在最近一次美甲服务后第 ${TEAM_CARE_FOLLOWUP_DAY} 天进入护理回访推荐`);
+      if(!assigned&&!careReady(m))rows.push('暂无到期且待分派的护理回访');
     }
     if(objective==='preview'&&!matchingPreviews(m).length)rows.push('需要匹配偏好的活跃会员及 14 天内计划上架的款式');
     return rows;
@@ -264,7 +272,7 @@
       <section class="profile-section"><div class="profile-section-head"><h3>个人复购周期</h3><span class="member-state active">${confidence}</span></div><div class="cycle-labels"><span>最近到店 ${escape(m.last_visit)}</span><b>今天 · ${m.days} 天</b></div><div class="personal-cycle" style="--cycle:${averagePosition}%" role="img" aria-label="个人平均周期 ${m.cycle} 天，距最近到店 ${m.days} 天，为平均周期的 ${m.ratio} 倍"><div class="personal-cycle-fill" style="width:${Math.min(100,m.days/scale*100)}%"></div><span class="personal-cycle-marker" data-label="平均 ${m.cycle} 天"></span></div><p>当前为个人平均复购周期的 <b>${m.ratio} 倍</b>，状态为“${LABELS[m.lifecycle]}”。${m.visit_count<2?'历史到店间隔不足，先使用参考周期。':'根据历史到店间隔计算，备注不直接改变周期判定。'}</p></section>
       <section class="profile-section profile-duo"><div><h3>偏好与权益</h3><dl class="profile-preferences"><dt>偏好款式</dt><dd>${escape(m.preference)}</dd><dt>偏好技师</dt><dd>${escape(m.preferred_technician||'暂无记录')}</dd><dt>储值权益</dt><dd>余额 ${money(m.balance).replace('.00','')}，不作为新增营收计算</dd><dt>加入会员</dt><dd>${escape(m.created_date)}</dd></dl></div><div><h3>营销资格检查</h3><ul class="profile-checks">${profileCheck(m.consent,m.consent?'已获得营销授权':'未获得营销授权')}${profileCheck(!m.recent,m.recent?'14 天内已有联系':'14 天内无触达')}${profileCheck(!m.complaint,m.complaint?'有未解决投诉':'无未解决投诉')}${profileCheck(!m.appointment,m.appointment?'已有未来预约':'无未来预约')}${m.care_paused?profileCheck(false,'店主已选择暂不联系'):''}</ul></div></section>
       <section class="profile-section"><div class="profile-section-head"><h3>老板娘备注</h3><small>${notes.length} 条 · 门店内可见</small></div>${notes.length?notes.map(note=>profileNoteItem(note)).join(''):'<p class="profile-empty">还没有备注，可以记下她喜欢的款式和沟通习惯。</p>'}${noteEditor(m.member_id)}</section>
-      <section class="profile-section"><div class="profile-section-head"><h3>护理需求</h3><button class="member-text-button" data-member-compose="care">准备护理沟通</button></div>${m.care_need_tags?`<div class="profile-care-tags">${m.care_need_tags.split('|').map(tag=>`<span>${escape(tag)}</span>`).join('')}</div><p>建议服务：${escape(m.preferred_care_service||'到店后确认')}<br>需求来源：${escape(careSource)} · 美甲后回访日 ${escape(teamCareFollowupDate(recentNailVisits.get(m.member_id)?.date)||'待确认')}</p>`:'<p class="profile-empty">暂无明确护理需求，先询问本人意愿，再推荐合适服务。</p>'}<p class="muted">${escape(care.care_guidance)} ${care.care_followup_opt_in?'已同意护理跟进。':'尚未同意护理跟进，当前只能预览沟通草稿。'}</p></section>
+      <section class="profile-section"><div class="profile-section-head"><h3>护理需求</h3><button class="member-text-button" data-member-compose="care">准备护理沟通</button></div>${m.care_need_tags?`<div class="profile-care-tags">${m.care_need_tags.split('|').map(tag=>`<span>${escape(tag)}</span>`).join('')}</div><p>建议服务：${escape(m.preferred_care_service||'到店后确认')}<br>需求来源：${escape(careSource)} · 美甲后回访日 ${escape(teamCareFollowupDate(recentNailVisits.get(m.member_id)?.completed_on)||'待确认')}</p>`:'<p class="profile-empty">暂无明确护理需求，先询问本人意愿，再推荐合适服务。</p>'}<p class="muted">${escape(care.care_guidance)} ${care.care_followup_opt_in?'已同意护理跟进。':'尚未同意护理跟进，当前只能预览沟通草稿。'}</p></section>
       ${assigned?`<p class="profile-qualification">已有待联系任务 · 负责人 ${escape(assigned.assignee)} <button data-view-task="${assigned.task_id}">查看任务</button></p>`:''}
       ${restrictions.length?`<p class="profile-qualification">当前联系限制：${escape(restrictions.join('、'))}。可准备草稿，暂不可创建触达任务。</p>`:''}<div class="profile-actions"><button data-member-history="${m.member_id}">完整消费记录</button><button class="primary" data-member-compose="repurchase">根据档案准备话术</button></div></article>`;
   }
@@ -567,8 +575,7 @@
   function matchesOpportunity(m,key){
     if(key==='repurchase')return ['due','low_frequency','dormant'].includes(m.lifecycle);
     if(key==='balance')return m.ratio>1.15&&m.balance>0;
-    if(key==='care')return Boolean(memberCareIndex.get(m.member_id)?.care_followup_opt_in
-      &&teamCareFollowupDue(recentNailVisits.get(m.member_id)?.date,state.calendarDate));
+    if(key==='care')return Boolean(memberCareIndex.get(m.member_id)?.care_followup_opt_in&&careReady(m));
     if(key==='preview')return matchingPreviews(m).length>0;
     if(key==='greeting')return m.lifecycle==='active'&&m.visit_count>=2&&(!m.last_contact_date||daysBetween(WORK_DATE,m.last_contact_date)>=30);
     return false;
@@ -669,7 +676,9 @@
     const reasons=memberBlockers(m,objective);
     if(reasons.length)throw new Error(`${m.name} 暂不可联系：${reasons.join('、')}。`);
     const previous=ui.picks.get(m.member_id);
-    const pick={member_id:m.member_id,objective,assignee:previous?.assignee??suggestedEmployee(m),note:previous?.note||'',...details};
+    const serviceOrderId=objective==='care'?pendingCare.get(m.member_id)?.service_order_id:undefined;
+    const pick={member_id:m.member_id,objective,service_order_id:serviceOrderId,
+      assignee:previous?.assignee??suggestedEmployee(m),note:previous?.note||'',...details};
     ui.picks.set(m.member_id,pick);
   }
   function dispatchPanel() {
@@ -701,7 +710,7 @@
       const selected=ui.picks.has(button.dataset.pick);
       button.setAttribute('aria-pressed',String(selected));
       button.querySelector('.pick-label').textContent=selected?'已选 · 移除':'加入清单';
-      button.closest('.hanger').classList.toggle('selected',selected);
+      button.closest('.hanger')?.classList.toggle('selected',selected);
     });
   }
   function focusDispatch(){
@@ -709,15 +718,36 @@
     panel.focus({preventScroll:true});
     panel.scrollIntoView({block:'start'});
   }
+  let careQueuePage=1;
+  function careQueue() {
+    const rows=[...pendingCare.values()].sort((a,b)=>a.due_on.localeCompare(b.due_on)||a.member_id.localeCompare(b.member_id));
+    if(!rows.length)return '<div class="empty atelier-empty"><p>暂无到期且待分派的护理回访。</p></div>';
+    const pageSize=12,pages=Math.ceil(rows.length/pageSize);
+    careQueuePage=Math.min(careQueuePage,pages);
+    const visible=rows.slice((careQueuePage-1)*pageSize,careQueuePage*pageSize);
+    const body=visible.map(row=>{
+      const m=member(row.member_id),selected=ui.picks.has(row.member_id);
+      const reasons=memberBlockers(m,'care');
+      if(activeTask(m.member_id))reasons.push('已有待联系任务');
+      if(m.last_handled_on===WORK_DATE)reasons.push('今天已有沟通记录');
+      return `<tr><td>${escape(m.name)}<br><small>${escape(row.member_id)}${row.data_type==='simulation'?' · 模拟':''}</small></td>
+        <td>${escape(row.completed_on)}</td><td>${escape(row.due_on)}</td>
+        <td class="wrap">${reasons.length?escape(reasons.join('、')):'可分派'}</td>
+        <td><button type="button" data-pick="${escape(row.member_id)}" aria-pressed="${selected}" ${reasons.length&&!selected?'disabled':''}><span class="pick-label">${selected?'已选 · 移除':'加入清单'}</span></button></td></tr>`;
+    });
+    return table(['顾客','服务完成日','回访到期日','联系资格','操作'],body)+
+      (pages>1?`<div class="button-row" aria-label="回访待办分页"><button data-care-queue-page="${careQueuePage-1}" ${careQueuePage===1?'disabled':''}>上一页</button><span>${careQueuePage} / ${pages}</span><button data-care-queue-page="${careQueuePage+1}" ${careQueuePage===pages?'disabled':''}>下一页</button></div>`:'');
+  }
   function dashboard(){
     const careMode=ui.opportunity==='care';
+    const queuedCare=careMode&&Array.isArray(state.careReminders);
     const groups=opportunityGroups(),picks=careRecommendations(groups);
     const total=new Set(Object.values(groups).flat().map(m=>m.member_id)).size;
-    const eligible=ui.opportunity==='all'?total:groups[ui.opportunity].length;
-    content.innerHTML=`<section class="growth-intro"><div><h2>今天，联系哪些顾客？</h2><p>从 <strong>${state.members.length.toLocaleString('zh-CN')}</strong> 位会员中，${careMode?`筛选最近一次美甲服务后第 ${TEAM_CARE_FOLLOWUP_DAY} 天、已同意护理跟进的顾客。`:'按个人复购周期、到店情况、顾客偏好和上架计划找出联系机会。'}先选人，再交给合适的员工。</p></div><div class="glass-track"><aside class="growth-daily-note glass-tilt glass-surface"><p><strong>${eligible.toLocaleString('zh-CN')}</strong> 位符合当前机会</p><small>已排除有联系限制、已有待联系任务和今天已处理的顾客</small><button class="primary" id="jump-dispatch">查看待分派清单 · <span id="pick-count">${ui.picks.size}</span> 位</button></aside></div></section>
-      <section class="growth-opportunities"><div class="growth-section-title"><h2 class="atelier-heading">经营机会</h2><p>同一会员可能符合多个机会，人数不相加。</p></div><div class="opportunity-scroll"><div class="growth-opportunity-tabs" role="group" aria-label="选择经营机会" style="--opportunity-count:${Object.keys(OPPORTUNITIES).length};--opportunity-index:${Object.keys(OPPORTUNITIES).indexOf(ui.opportunity)}"><span class="opportunity-highlight" aria-hidden="true"></span>${Object.entries(OPPORTUNITIES).map(([key,item])=>`<button data-opportunity="${key}" aria-pressed="${ui.opportunity===key}"><span>${item.label}</span><b>${(key==='all'?total:groups[key].length).toLocaleString('zh-CN')}</b></button>`).join('')}</div></div></section>
-      <section class="growth-priority"><div class="section-head"><div><h2 class="atelier-heading">${ui.opportunity==='all'?'今日优先联系':OPPORTUNITIES[ui.opportunity].label+' · 优先名单'}</h2><p class="muted">${careMode?`按北京时间，在最近一次美甲服务满 3 周当天推荐。`:ui.opportunity==='repurchase'?'按距上次到店的天数与个人复购周期的比值，筛选待复购、低频和沉睡会员。':ui.opportunity==='all'?'从不同机会里挑选适合联系的人，再决定这次怎么聊。':'按会员档案、偏好和联系资格筛选，带着具体理由联系。'}</p></div><div class="count-control"><label for="care-limit">显示推荐</label><select id="care-limit">${options([3,4,5,8],ui.limit)}</select></div></div>
-      ${picks.length?careCards(picks):`<div class="empty atelier-empty">${ATELIER_NOTE}<p>${careMode?'暂无符合条件的待回访会员。':'这类机会暂时没有符合条件的会员，可以切换其他经营机会。'}</p><p><button data-page="campaigns">查看已有任务</button></p></div>`}<p class="care-note">${careMode?'同一天的顾客按会员编号排序。':'名单按已有规则优先级排列；评分不由模型计算。余额是服务权益，不作为新增收入或排序加分。'}</p></section>
+    const eligible=queuedCare?pendingCare.size:ui.opportunity==='all'?total:groups[ui.opportunity].length;
+    content.innerHTML=`<section class="growth-intro"><div><h2>今天，联系哪些顾客？</h2><p>从 <strong>${state.members.length.toLocaleString('zh-CN')}</strong> 位会员中，${queuedCare?'查看满 21 天的护理回访，逾期待办仍可分派。':careMode?`筛选最近一次美甲服务后第 ${TEAM_CARE_FOLLOWUP_DAY} 天、已同意护理跟进的顾客。`:'按个人复购周期、到店情况、顾客偏好和上架计划找出联系机会。'}先选人，再交给合适的员工。</p></div><div class="glass-track"><aside class="growth-daily-note glass-tilt glass-surface"><p><strong>${eligible.toLocaleString('zh-CN')}</strong> 位符合当前机会</p><small>${queuedCare?'有联系限制的待办会保留，并显示原因。':'已排除有联系限制、已有待联系任务和今天已处理的顾客'}</small><button class="primary" id="jump-dispatch">查看待分派清单 · <span id="pick-count">${ui.picks.size}</span> 位</button></aside></div></section>
+      <section class="growth-opportunities"><div class="growth-section-title"><h2 class="atelier-heading">经营机会</h2><p>同一会员可能符合多个机会，人数不相加。</p></div><div class="opportunity-scroll"><div class="growth-opportunity-tabs" role="group" aria-label="选择经营机会" style="--opportunity-count:${Object.keys(OPPORTUNITIES).length};--opportunity-index:${Object.keys(OPPORTUNITIES).indexOf(ui.opportunity)}"><span class="opportunity-highlight" aria-hidden="true"></span>${Object.entries(OPPORTUNITIES).map(([key,item])=>`<button data-opportunity="${key}" aria-pressed="${ui.opportunity===key}"><span>${item.label}</span><b>${(key==='all'?total:key==='care'&&Array.isArray(state.careReminders)?pendingCare.size:groups[key].length).toLocaleString('zh-CN')}</b></button>`).join('')}</div></div></section>
+      ${queuedCare?`<section class="growth-priority"><div class="section-head"><h2 class="atelier-heading">护理回访待分派</h2></div>${careQueue()}</section>`:`<section class="growth-priority"><div class="section-head"><div><h2 class="atelier-heading">${ui.opportunity==='all'?'今日优先联系':OPPORTUNITIES[ui.opportunity].label+' · 优先名单'}</h2><p class="muted">${careMode?`按北京时间，在最近一次美甲服务满 3 周当天推荐。`:ui.opportunity==='repurchase'?'按距上次到店的天数与个人复购周期的比值，筛选待复购、低频和沉睡会员。':ui.opportunity==='all'?'从不同机会里挑选适合联系的人，再决定这次怎么聊。':'按会员档案、偏好和联系资格筛选，带着具体理由联系。'}</p></div><div class="count-control"><label for="care-limit">显示推荐</label><select id="care-limit">${options([3,4,5,8],ui.limit)}</select></div></div>
+      ${picks.length?careCards(picks):`<div class="empty atelier-empty">${ATELIER_NOTE}<p>${careMode?'暂无符合条件的待回访会员。':'这类机会暂时没有符合条件的会员，可以切换其他经营机会。'}</p><p><button data-page="campaigns">查看已有任务</button></p></div>`}<p class="care-note">${careMode?'同一天的顾客按会员编号排序。':'名单按已有规则优先级排列；评分不由模型计算。余额是服务权益，不作为新增收入或排序加分。'}</p></section>`}
       <section class="dispatch-panel" id="dispatch-queue" tabindex="-1" aria-label="待分派清单">${dispatchPanel()}</section>`;
     setupGlass(content);
     setupCareRow();
@@ -748,9 +778,10 @@
       if(!assignableStaff().includes(assignee))throw new Error(`请为 ${m.name} 选择已开通账号的负责人。`);
       const p=pick.product_id?offerProduct(pick.product_id):opportunityProduct(m,pick.objective);
       const task={member_id:m.member_id,objective:pick.objective,
-        product_id:p?.product_id||null,assignee,note:pick.note.trim()};
+        product_id:p?.product_id||null,service_order_id:pick.service_order_id,assignee,note:pick.note.trim()};
       const reasons=taskContactBlockers(task);
       if(m.last_handled_on===WORK_DATE)reasons.push('今天已有沟通记录');
+      if(pick.service_order_id&&pendingCare.get(m.member_id)?.service_order_id!==pick.service_order_id)reasons.push('对应服务已变化，请重新选择');
       if(!p&&!isNoProductObjective(pick.objective))reasons.push('暂缺匹配款式或服务');
       if(reasons.length)throw new Error(`${m.name} 暂不可分派：${reasons.join('、')}。`);
       task.reason=opportunityEvidence(m,pick.objective,p);
@@ -830,7 +861,7 @@
         <p class="helper">到期会出现在今日待办。跟进完成后可以清空日期并保存。</p>
       </section>
       <section class="task-form-plan" data-appointment-fields ${draft.outcome==='已预约'?'':'hidden'}>
-        <h3>预约与到店</h3>
+        <h3>${task.care_service_order_id?'本次回访预约与到店':'预约与到店'}</h3>
         <div class="task-form-grid"><div class="field"><label for="task-appointment-at">预约时间 <small>选填 · 北京时间</small></label><input type="datetime-local" id="task-appointment-at" name="appointmentAt" value="${escape(draft.appointmentAt||'')}"></div>
         <div class="field"><label for="task-appointment-status">到店状态</label><select id="task-appointment-status" name="appointmentStatus">${Object.entries(TEAM_APPOINTMENT_LABELS).map(([key,label])=>`<option value="${key}" ${key===draft.appointmentStatus?'selected':''}>${key==='rescheduled'?'改期':label}</option>`).join('')}</select></div></div>
         <p class="helper">改期时填写新时间。预约时间到达后可登记已到店或未到店。</p>
@@ -920,12 +951,14 @@
       }
       if(button.dataset.taskView){ui.taskFilter=button.dataset.taskView;render();}
       if(button.dataset.opportunity)selectOpportunity(button);
+      if(button.dataset.careQueuePage){careQueuePage=Number(button.dataset.careQueuePage);render();}
       if(button.id==='jump-dispatch')focusDispatch();
       if(button.dataset.pick){
         const id=button.dataset.pick;
         if(ui.picks.has(id))ui.picks.delete(id);
         else {
-          const pick=careRecommendations().find(({m})=>m.member_id===id);
+          const pick=ui.opportunity==='care'&&pendingCare.has(id)?{m:member(id),objective:'care'}
+            :careRecommendations().find(({m})=>m.member_id===id);
           if(!pick)throw new Error('会员已不在当前推荐列表。');
           stagePick(pick.m,pick.objective);
         }
@@ -1401,7 +1434,7 @@
     const previous={...USER},revision=++identityRevision;
     Object.assign(USER,{employee,role:employee?'employee':'owner'});
     try {
-      const shared=preview.scopedState(USER);
+      const shared=previewState(USER);
       if(revision!==identityRevision)return;
       resetIdentityDrafts(employee);
       applyState(shared);
@@ -1464,7 +1497,7 @@
   }
   async function refreshShared(force=false) {
     if(USER.role==='guest'||(!force&&(synchronizing||pendingWrites||document.hidden||editingPage())))return;
-    if(!serverMode) { applyState(preview.scopedState(USER)); render(); return; }
+    if(!serverMode) { applyState(previewState(USER)); render(); return; }
     synchronizing=true;
     try {
       const update=await requestState('state',force?{}:{revision:state.revision,calendarDate:state.calendarDate});

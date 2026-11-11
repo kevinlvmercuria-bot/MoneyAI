@@ -29,7 +29,7 @@ function createApp(pool, options = {}) {
     const app = express();
     app.disable('x-powered-by');
     const auth = require('./team-auth').registerTeamAuth(app, pool);
-    require('./team-routes').registerTeamRoutes(app, pool, auth, { now: options.teamNow });
+    require('./team-routes').registerTeamRoutes(app, pool, auth, { now: options.teamNow, snapshot: options.teamSnapshot });
     app.use('/api', auth.ownerOnly);
     const { registerImageRoutes, registerCopyRoutes } = require('./copy-routes');
     registerImageRoutes(app, pool);
@@ -332,10 +332,12 @@ async function start() {
     try {
         const state = await transaction(pool, store.state, 'Shared');
         if (!state.members.length) throw new Error('会员数据为空，请先运行 npm run db:init');
+        const { recordset } = await pool.request().query("SELECT OBJECT_ID(N'dbo.TeamCareReminders', N'U') AS id");
+        if (!recordset[0].id) throw new Error('护理回访表尚未初始化，请按 README 核对目标数据库和迁移步骤。');
         await transaction(pool, require('./team-auth').initializeTeamAuth);
     } catch (error) {
         await pool.close();
-        throw new Error('数据库尚未就绪，请检查连接并运行 npm run db:init。' + error.message);
+        throw new Error('数据库尚未就绪，请检查连接及初始化状态。' + error.message);
     }
     const server = createApp(pool).listen(Number(process.env.APP_PORT || 3000), '127.0.0.1', () => {
         console.log(`NailMate 已启动 http://127.0.0.1:${server.address().port}`);

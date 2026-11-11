@@ -137,10 +137,10 @@ test('旧反馈使用实际 UTC 审计时间恢复冷却口径，保留原始历
     assert.throws(() => restarted.applyAction(owner, { action: 'assign', tasks }), /14 天内已联系/);
 });
 
-test('护理回访按最近一次美甲后的第 21 个北京时间日推荐，已分派任务可随后登记', () => {
+test('护理回访满 21 个北京时间自然日到期，未分派时跨日保留', () => {
     const member = eligible[0];
-    const earlier = { member_id: member.member_id, order_type: 'nail_service', order_date: '2026-10-21' };
-    const recent = { ...earlier, order_date: '2026-10-22' };
+    const earlier = { member_id: member.member_id, order_type: 'nail_service', order_date: '2026-10-21', order_id: 'order-early', data_type: 'simulation' };
+    const recent = { ...earlier, order_date: '2026-10-22', order_id: 'order-recent' };
     const fixture = {
         ...snapshot,
         orders: [recent, earlier, { ...recent, order_type: 'care_product', order_date: '2026-11-01' }],
@@ -150,18 +150,42 @@ test('护理回访按最近一次美甲后的第 21 个北京时间日推荐，�
     const engine = createTeamStore(fixture, { now: () => now });
     const [input] = assignment(engine);
     input.objective = 'care';
+    input.service_order_id = recent.order_id;
     input.product_id = snapshot.products.find(product => product.is_active && product.product_type === 'care_service').product_id;
     const assign = () => engine.applyAction(owner, { action: 'assign', tasks: [input] });
     assert.throws(assign, /第 21 天/);
 
     now = new Date('2026-11-11T16:00:00Z');
-    const { taskIds: [id] } = assign();
+    assert.equal(engine.refreshCareReminders(), true);
+    assert.equal(engine.scopedState(owner).careReminders[0].status, 'pending');
     now = new Date('2026-11-12T16:00:00Z');
+    assert.equal(engine.refreshCareReminders(), false);
+    const { taskIds: [id] } = assign();
     const employee = { role: 'employee', employee: input.assignee };
     const result = engine.applyAction(employee, { action: 'result', id, outcome: '已沟通', note: '', message: '' });
     assert.equal(result.state.tasks[0].status, 'recorded');
-    const fresh = createTeamStore(fixture, { now: () => now });
-    assert.throws(() => fresh.applyAction(owner, { action: 'assign', tasks: [input] }), /第 21 天/);
+    assert.equal(engine.scopedState(owner).careReminders[0].status, 'processed');
+    assert.throws(assign, /第 21 天/);
+});
+
+test('真实顾客只有确认完成且带完成日的美甲服务可以产生回访', () => {
+    const member = { ...eligible[0], data_type: 'real' };
+    const service = { member_id: member.member_id, order_type: 'nail_service', data_type: 'real', order_date: '2026-10-01' };
+    const fixture = { ...snapshot, data_type: 'real', members: [member], orders: [
+        { ...service, order_id: 'unconfirmed' },
+        { ...service, order_id: 'date-missing', status: 'completed' },
+        { ...service, order_id: 'cancelled', status: 'cancelled', completed_on: '2026-10-01' },
+        { ...service, order_id: 'simulation', data_type: 'simulation', status: 'completed', completed_on: '2026-10-01' },
+        { ...service, order_id: 'care-only', order_type: 'care_service', status: 'completed', completed_on: '2026-10-01' },
+    ], member_care_profiles: [{ member_id: member.member_id, care_followup_opt_in: true }] };
+    const now = () => new Date('2026-11-22T04:00:00Z');
+    const engine = createTeamStore(fixture, { now });
+    assert.equal(engine.refreshCareReminders(), false);
+    fixture.orders.push({ ...service, order_id: 'completed-service', status: 'completed', completed_on: '2026-11-01' });
+    assert.equal(engine.refreshCareReminders(), true);
+    assert.deepEqual(engine.scopedState(owner).careReminders.map(row => [row.service_order_id, row.data_type]), [
+        ['completed-service', 'real'],
+    ]);
 });
 
 test('北京时间待办、预约改期、到店结果与明细统计沿用同一任务', () => {
@@ -212,6 +236,117 @@ test('图表零数据和大数值、反馈口径、存储失败不伪报成功',
     assert.equal(engine.scopedState(owner).tasks.length, 0);
 });
 
+test('SQL 护理回访补算、唯一性、原子分派及订单状态变更', { timeout: 90000 }, async () => {
+    const { connect, transaction } = require('./db');
+    const { initialize } = require('../database/setup');
+    const { initializeTeamCareReminders } = require('./team-reminders');
+    const { createApp } = require('./main');
+    const database = 'NailMate_Care_' + randomBytes(8).toString('hex');
+    const master = await connect('master');
+    const [a, b, c] = eligible;
+    const services = [a, b, c].map((member, index) => ({
+        member_id: member.member_id, order_id: 'fixture-service-' + index, order_type: 'nail_service',
+        completed_on: '2026-11-01', status: 'completed', data_type: 'simulation',
+    }));
+    const fixture = { ...snapshot, orders: [...services,
+        ...['cancelled', 'pending'].map(status => ({ ...services[0], order_id: status, status, completed_on: '2026-11-18' })),
+        { ...services[0], order_id: 'fixture-care-product', order_type: 'care_product', completed_on: '2026-11-18' },
+    ], appointments: [{ member_id: c.member_id, status: 'scheduled', appointment_date: '2026-11-30' }],
+    member_care_profiles: [a, b, c].map(member => ({ member_id: member.member_id, care_followup_opt_in: true })) };
+    let now = new Date('2026-11-21T15:59:59Z');
+    let created = false, pool, server, base;
+    const postTo = request => body => request(base + '/api/team', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+    });
+    try {
+        await master.request().query(`CREATE DATABASE [${database}]`); created = true;
+        pool = await connect(database);
+        await assert.rejects(transaction(pool, async tx => {
+            await initializeTeamCareReminders(tx);
+            throw new Error('test migration rollback');
+        }), /test migration rollback/);
+        assert.equal((await pool.request().query("SELECT OBJECT_ID('dbo.TeamCareReminders') AS id")).recordset[0].id, null);
+        await initialize(pool);
+        await transaction(pool, initializeTeamCareReminders);
+        const start = async () => {
+            server = createApp(pool, { teamNow: () => now, teamSnapshot: fixture }).listen(0, '127.0.0.1');
+            await new Promise(resolve => server.once('listening', resolve));
+            base = 'http://127.0.0.1:' + server.address().port;
+        };
+        await start();
+        let post = postTo(await authenticate(base, 'setup'));
+        const read = async () => (await (await post({ action: 'bootstrap' })).json()).state;
+        const before = await read();
+        assert.deepEqual(before.careReminders, [], '第 20 天没有提醒');
+        const employee = before.accounts[0].employee;
+        const credentials = { username: 'care-worker', password: 'care-worker-fixture' };
+        assert.equal((await post({ action: 'employeeAccount', employee, ...credentials })).status, 200);
+        let employeePost = postTo(await authenticate(base, 'login', credentials));
+
+        now = new Date('2026-11-21T16:00:00Z');
+        const scans = await Promise.all([read(), read()]);
+        assert.deepEqual(scans[0].careReminders, scans[1].careReminders);
+        assert.equal(scans[0].careReminders.length, 3, '第 21 天到期，取消及未完成订单不会覆盖有效订单');
+        assert.ok(scans[0].careReminders.every(row => row.due_on === '2026-11-22' && row.status === 'pending' && row.data_type === 'simulation'));
+        const rows = () => pool.request().query('SELECT * FROM dbo.TeamCareReminders').then(result => result.recordset);
+        assert.equal((await rows()).length, 3);
+        await assert.rejects(pool.request().query(`
+            INSERT dbo.TeamCareReminders
+            SELECT TOP (1) member_id,service_order_id,completed_on,due_on,status,task_id,data_type,created_at,updated_at
+            FROM dbo.TeamCareReminders`), /PRIMARY KEY|duplicate|重复/i);
+        const employeeBefore = await (await employeePost({ action: 'bootstrap' })).json();
+        assert.deepEqual(employeeBefore.state.tasks, []);
+        assert.equal(employeeBefore.state.careReminders, undefined);
+
+        await new Promise(resolve => server.close(resolve));
+        server = null;
+        now = new Date('2026-11-22T16:00:00Z');
+        await start();
+        post = postTo(await authenticate(base, 'login'));
+        employeePost = postTo(await authenticate(base, 'login', credentials));
+        assert.deepEqual((await read()).careReminders, scans[0].careReminders, '重启后第 22 天仍可分派');
+        const product_id = fixture.products.find(product => product.is_active && product.product_type === 'care_service').product_id;
+        const assign = (service, fields = {}) => ({ action: 'assign', tasks: [{
+            member_id: service.member_id, objective: 'care', service_order_id: service.order_id,
+            product_id, assignee: employee, message: '护理回访测试', note: '', reason: '', ...fields,
+        }] });
+        assert.equal((await post(assign(services[2]))).status, 409, '无关预约仍保留现有联系限制');
+        assert.equal((await read()).careReminders.find(row => row.member_id === c.member_id).status, 'pending');
+        const request = assign(services[0]);
+        assert.equal((await post({ ...request, tasks: [...request.tasks, { ...request.tasks[0], member_id: 'missing' }] })).status, 400);
+        assert.equal((await read()).careReminders.find(row => row.member_id === a.member_id).status, 'pending', '批次失败后可重试');
+        const assigned = await Promise.all([post(request), post(request)]);
+        assert.deepEqual(assigned.map(response => response.status).sort(), [200, 409]);
+        const taskId = (await assigned.find(response => response.ok).json()).taskIds[0];
+        const employeeAfter = (await (await employeePost({ action: 'bootstrap' })).json()).state;
+        assert.deepEqual(employeeAfter.tasks.map(task => task.task_id), [taskId]);
+        assert.equal((await employeePost({ action: 'result', id: taskId, outcome: '已预约',
+            note: '对应维护预约', message: '', appointmentAt: '2026-11-23T12:00' })).status, 200);
+        assert.equal((await read()).careReminders.find(row => row.member_id === a.member_id).status, 'booked');
+        assert.equal((await post(request)).status, 409);
+
+        services[1].completed_on = '2026-11-03';
+        assert.equal((await read()).careReminders.find(row => row.member_id === b.member_id).due_on, '2026-11-24');
+        assert.equal((await post(assign(services[1]))).status, 409);
+        now = new Date('2026-11-23T16:00:00Z');
+        const second = await (await post(assign(services[1]))).json();
+        assert.equal(second.taskIds.length, 1);
+        fixture.orders.push({ ...services[1], order_id: 'new-valid-service', completed_on: '2026-11-24' });
+        const refreshed = await read();
+        assert.equal(refreshed.careReminders.find(row => row.member_id === b.member_id).status, 'superseded');
+        assert.equal(refreshed.tasks.find(task => task.task_id === second.taskIds[0]).status, 'archived');
+        assert.equal((await employeePost({ action: 'result', id: second.taskIds[0], outcome: '已沟通', note: '', message: '' })).status, 409);
+        now = new Date('2026-12-14T16:00:00Z');
+        assert.equal((await read()).careReminders.find(row => row.service_order_id === 'new-valid-service').status, 'pending');
+        assert.equal((await rows()).length, 4);
+    } finally {
+        if (server) await new Promise(resolve => server.close(resolve));
+        if (pool) await pool.close();
+        if (created) await master.request().query(`ALTER DATABASE [${database}] SET SINGLE_USER WITH ROLLBACK IMMEDIATE; DROP DATABASE [${database}]`);
+        await master.close();
+    }
+});
+
 test('SQL 账号、员工资料隔离、反馈并发与持久化', { timeout: 90000 }, async () => {
     const { connect } = require('./db');
     const { initialize } = require('../database/setup');
@@ -249,7 +384,7 @@ test('SQL 账号、员工资料隔离、反馈并发与持久化', { timeout: 90
         now = new Date('2026-11-11T16:00:00Z');
         const midnight = await (await post({ ...poll, now: '2100-01-01' })).json();
         assert.equal(midnight.state.calendarDate, '2026-11-12');
-        assert.equal(midnight.state.revision, initial.state.revision);
+        assert.ok(midnight.state.revision >= initial.state.revision);
         const engine = createTeamStore(snapshot);
         const tasks = assignment(engine);
         const employee = tasks[0].assignee;

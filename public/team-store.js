@@ -11,13 +11,34 @@ const TEAM_APPOINTMENT_LABELS = {
 
 const TEAM_CARE_FOLLOWUP_DAY = 21;
 
-function teamCareFollowupDue(visitDate, calendarDate) {
-    return Boolean(calendarDate && teamCareFollowupDate(visitDate) === calendarDate);
-}
-
 function teamCareFollowupDate(visitDate) {
     if (!teamValidDate(visitDate)) return '';
     return new Date(Date.parse(visitDate) + TEAM_CARE_FOLLOWUP_DAY * 86400000).toISOString().slice(0, 10);
+}
+
+function teamLatestCompletedNails(snapshot, date) {
+    const memberTypes = new Map(snapshot.members.map(row => [row.member_id, row.data_type]));
+    const latest = new Map();
+    for (const order of snapshot.orders) {
+        if (order.order_type !== 'nail_service' || typeof order.order_id !== 'string' || !order.order_id.trim()
+            || order.order_id.length > 128 || memberTypes.get(order.member_id) !== order.data_type) continue;
+        const simulation = snapshot.data_type === 'simulation' && order.data_type === 'simulation';
+        // Historical rows in the bundled simulation have an order date but no
+        // status. Real records must come from a source with explicit completion.
+        if (order.status !== 'completed' && !(simulation && order.status == null)) continue;
+        if (!simulation && !(snapshot.data_type !== 'simulation' && order.data_type === 'real')) continue;
+        const completed = order.completed_on ?? (simulation && order.order_date <= snapshot.as_of_date ? order.order_date : null);
+        if (!teamValidDate(completed) || completed > date) continue;
+        const previous = latest.get(order.member_id);
+        if (!previous || completed > previous.completed_on
+            || (completed === previous.completed_on && order.order_id > previous.order_id))
+            latest.set(order.member_id, { ...order, completed_on: completed });
+    }
+    return latest;
+}
+
+function teamCareReminderKey(row) {
+    return JSON.stringify([row.member_id, row.service_order_id]);
 }
 
 function teamCalendarTime(now = new Date()) {
@@ -87,19 +108,12 @@ function teamTodoReasons(task, date) {
     const careProfiles = new Map(snapshot.member_care_profiles.map(row => [row.member_id, row]));
     const snapshotNotes = new Map(snapshot.member_notes.map(row => [row.note_id, row]));
     const scheduledAppointments = teamLatestScheduledAppointments(snapshot.appointments);
-    const recentNails = new Map();
-    for (const order of snapshot.orders) {
-      if (order.order_type !== 'nail_service' || order.order_date > snapshot.as_of_date) continue;
-      const previous = recentNails.get(order.member_id);
-      if (!previous || order.order_date > previous) recentNails.set(order.member_id, order.order_date);
-    }
-
     // Single-file preview. All fixture data and actions stay in this browser.
     const storageKey = 'nailmate-wechat-preview-v1-' + snapshot.snapshot_id;
     const clockNow = () => teamBusinessClock(options.now?.());
     let store = {
       accounts: roster.map((employee, index) => ({ employee, username: 'staff' + String(index + 1).padStart(2, '0'), role: 'employee' })),
-      tasks: [], notes: [], noteEdits: {}, images: {}, memberUpdates: {}, care_records: [], logs: [], revision: 0,
+      tasks: [], notes: [], noteEdits: {}, images: {}, memberUpdates: {}, care_records: [], careReminders: [], logs: [], revision: 0,
     };
     try {
       const saved = options.initialState || (options.storage ? JSON.parse(options.storage.getItem(storageKey) || 'null') : null);
@@ -107,6 +121,7 @@ function teamTodoReasons(task, date) {
     } catch {}
     // Older deletions left a blank login name behind in the employee list.
     store.accounts = store.accounts.filter(account => account.username);
+    if (options.careReminders) store.careReminders = options.careReminders;
     for (const id of new Set(store.tasks.filter(task => task.result).map(task => task.member_id)))
       rebuildMemberUpdates(store, id);
     const staff = () => store.accounts.map(account => account.employee);
@@ -139,9 +154,58 @@ function teamTodoReasons(task, date) {
         workDate: clock.date, calendarDate: clock.date,
         memberUpdates: owner ? store.memberUpdates : Object.fromEntries(Object.entries(store.memberUpdates).filter(([id]) => allowed.has(id))),
         logs: owner ? store.logs : [],
+        ...(owner && { careReminders: store.careReminders }),
         care_records: owner ? store.care_records : [],
         accounts: owner ? store.accounts.filter(account => account.role === 'employee').map(({ employee, username }) => ({ employee, username })) : [],
       };
+    }
+
+    function reconcileCareReminders(next, clock) {
+      const latest = teamLatestCompletedNails(snapshot, clock.date);
+      const keys = new Set(next.careReminders.map(teamCareReminderKey));
+      const tasks = new Map(next.tasks.map(task => [task.task_id, task]));
+      let changed = false;
+      for (const reminder of next.careReminders) {
+        if (['processed', 'booked'].includes(reminder.status)) continue;
+        const order = latest.get(reminder.member_id);
+        const current = order?.order_id === reminder.service_order_id;
+        const due = current ? teamCareFollowupDate(order.completed_on) : reminder.due_on;
+        const status = !current ? 'superseded'
+          : reminder.status === 'superseded' || due > clock.date ? 'pending' : reminder.status;
+        const completed = current ? order.completed_on : reminder.completed_on;
+        if (status === reminder.status && completed === reminder.completed_on) continue;
+        const task = tasks.get(reminder.task_id);
+        if (reminder.status === 'assigned' && task) {
+          if (status !== 'assigned') {
+            task.status = 'archived';
+            task.history.push(`${current ? '服务完成日期已更正，等待重新到期' : '对应服务已失效或有更新的美甲完成记录'} · ${clock.date}`);
+          } else {
+            task.care_due_on = due;
+            task.history.push(`已校正本次回访的服务完成日期 · ${clock.date}`);
+          }
+        }
+        if (status === 'pending') reminder.task_id = null;
+        Object.assign(reminder, { status, due_on: due, completed_on: completed, updated_at: clock.utc });
+        changed = true;
+      }
+      for (const order of latest.values()) {
+        if (!careProfiles.get(order.member_id)?.care_followup_opt_in) continue;
+        const due = teamCareFollowupDate(order.completed_on);
+        if (due > clock.date) continue;
+        const identity = { member_id: order.member_id, service_order_id: order.order_id };
+        if (keys.has(teamCareReminderKey(identity))) continue;
+        next.careReminders.push({ ...identity, completed_on: order.completed_on, due_on: due, status: 'pending',
+          task_id: null, data_type: order.data_type, created_at: clock.utc, updated_at: clock.utc });
+        changed = true;
+      }
+      return changed;
+    }
+
+    function refreshCareReminders(clock = clockNow()) {
+      const next = structuredClone(store);
+      if (!reconcileCareReminders(next, clock)) return false;
+      commit(next);
+      return true;
     }
 
     function feedbackDate(result) {
@@ -212,7 +276,7 @@ function teamTodoReasons(task, date) {
       };
     }
 
-    function checkContact(next, id, objective, productId, date, newAssignment) {
+    function checkContact(next, id, objective, productId, date) {
       const m = members.get(id);
       const update = next.memberUpdates[id] || {};
       const product = products.get(productId);
@@ -225,11 +289,7 @@ function teamTodoReasons(task, date) {
         update.care_paused && '已标记暂不联系',
         m.data_completeness < .8 && '档案完整度不足',
       ].filter(Boolean);
-      if (objective === 'care') {
-        if (!careProfiles.get(id)?.care_followup_opt_in) reasons.push('未同意护理跟进');
-        if (newAssignment && !teamCareFollowupDue(recentNails.get(id), date))
-            reasons.push(`仅在最近一次美甲服务后第 ${TEAM_CARE_FOLLOWUP_DAY} 天进入护理回访推荐`);
-      }
+      if (objective === 'care' && !careProfiles.get(id)?.care_followup_opt_in) reasons.push('未同意护理跟进');
       if (objective === 'preview') {
         const untilLaunch = teamDaysBetween(product?.launch_date, date);
         if (m.lifecycle !== 'active' || product?.product_type !== 'nail_style' || !(untilLaunch >= 1 && untilLaunch <= 14)
@@ -244,6 +304,7 @@ function teamTodoReasons(task, date) {
       const next = structuredClone(store);
       const clock = clockNow();
       const { date, utc } = clock;
+      reconcileCareReminders(next, clock);
       let taskIds = [];
       switch (action) {
         case 'employeeAccount': {
@@ -297,14 +358,22 @@ function teamTodoReasons(task, date) {
             const productId = input.product_id || null;
             const product = products.get(productId);
             requireCondition(input.objective === 'greeting' ? productId === null : Boolean(product && (input.objective === 'preview' || product.is_active)), 400, '请选择有效的产品。');
-            const reasons = checkContact(next, input.member_id, input.objective, productId, date, true);
+            const reminder = input.objective === 'care' ? next.careReminders.find(row =>
+              row.member_id === input.member_id && row.service_order_id === input.service_order_id) : null;
+            if (input.objective === 'care')
+              requireCondition(reminder?.status === 'pending' && reminder.due_on <= date,
+                409, '护理回访需满第 21 天且仍待分派，请刷新回访名单。');
+            const reasons = checkContact(next, input.member_id, input.objective, productId, date);
             if (next.memberUpdates[input.member_id]?.last_handled_on === date) reasons.push('今天已有沟通记录');
             requireCondition(!reasons.length, 409, `暂不可分派：${reasons.join('、')}。`);
             const id = 'T' + String(next.tasks.length + 1).padStart(4, '0');
             next.tasks.push({ task_id: id, member_id: input.member_id, objective: input.objective, strategy: objectives.get(input.objective),
+              ...(reminder && { care_service_order_id: reminder.service_order_id, care_due_on: reminder.due_on }),
               assignee: input.assignee, product_id: productId, assigned_on: date, assigned_at: utc, assigned_by: account.username || '老板娘',
               note: field(input.note, 180), reason: field(input.reason, 1200),
-              message: field(input.message, 1600, true), status: 'assigned', result: null, history: [`老板娘分派给 ${input.assignee} · ${date}`], data_type: 'simulation' });
+              message: field(input.message, 1600, true), status: 'assigned', result: null, history: [`老板娘分派给 ${input.assignee} · ${date}`],
+              data_type: reminder?.data_type || members.get(input.member_id).data_type || 'simulation' });
+            if (reminder) Object.assign(reminder, { status: 'assigned', task_id: id, updated_at: utc });
             taskIds.push(id);
           }
           next.logs.push(`分派 ${taskIds.length} 项联系任务。`);
@@ -359,7 +428,12 @@ function teamTodoReasons(task, date) {
             updated_at: utc, recorded_by: account.employee };
           task.result_history.push({ ...task.result, revision: task.result_revision, message });
           task.history.push(`${account.employee} ${previous ? `将「${previous.outcome}」更新为` : '记录'}「${body.outcome}」 · ${date} · 第 ${task.result_revision} 次保存`);
-          const record = { task_id: task.task_id, member_id: task.member_id, outcome: body.outcome, note, owner: account.employee, recorded_as_of: task.result.recorded_on, data_type: 'simulation' };
+          const reminder = task.care_service_order_id && next.careReminders.find(row => row.task_id === task.task_id);
+          if (reminder && (body.outcome !== '暂不联系' || reminder.status === 'booked')) {
+            const booked = task.result.booked && plan.appointment_status !== 'no_show';
+            Object.assign(reminder, { status: booked ? 'booked' : 'processed', updated_at: utc });
+          }
+          const record = { task_id: task.task_id, member_id: task.member_id, outcome: body.outcome, note, owner: account.employee, recorded_as_of: task.result.recorded_on, data_type: task.data_type || 'simulation' };
           const recordIndex = next.care_records.findIndex(item => item.task_id === task.task_id);
           if (recordIndex < 0) next.care_records.push(record);
           else next.care_records[recordIndex] = record;
@@ -394,7 +468,7 @@ function teamTodoReasons(task, date) {
       return { state: scopedState(account, clock), taskIds };
     }
 
-    return { roster, scopedState, applyAction, listAccounts: () => store.accounts.map(({ employee, username }) => ({ employee, username })), exportState: () => structuredClone(store) };
+    return { roster, scopedState, applyAction, refreshCareReminders, listAccounts: () => store.accounts.map(({ employee, username }) => ({ employee, username })), exportState: () => structuredClone(store) };
   }
 
-if (typeof module !== 'undefined') module.exports = { createTeamStore, teamBusinessClock, teamCalendarTime, teamTodoReasons, teamAppointmentPending, teamTaskNeedsHandoff };
+if (typeof module !== 'undefined') module.exports = { createTeamStore, teamBusinessClock, teamCalendarTime, teamTodoReasons, teamAppointmentPending, teamTaskNeedsHandoff, teamCareReminderKey };

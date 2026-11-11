@@ -5,24 +5,25 @@ const path = require('node:path');
 const { sql, transaction } = require('./db');
 const { createTeamStore } = require('../public/team-store');
 const { saveCredentials } = require('./team-auth');
-const snapshot = JSON.parse(readFileSync(path.join(__dirname, '../data/team-data.json'), 'utf8'));
+const { loadTeamCareReminders, saveTeamCareReminders } = require('./team-reminders');
+const defaultSnapshot = JSON.parse(readFileSync(path.join(__dirname, '../data/team-data.json'), 'utf8'));
 
-function scopedSnapshot(account, tasks) {
+function scopedSnapshot(account, tasks, snapshot) {
     if (account.role === 'owner') return snapshot;
     const allowed = new Set(tasks.map(task => task.member_id));
-    const data = { as_of_date: snapshot.as_of_date, snapshot_id: snapshot.snapshot_id, products: snapshot.products };
+    const data = { as_of_date: snapshot.as_of_date, snapshot_id: snapshot.snapshot_id, data_type: snapshot.data_type, products: snapshot.products };
     for (const key of ['members', 'orders', 'appointments', 'member_notes', 'member_care_profiles']) {
         data[key] = snapshot[key].filter(row => allowed.has(row.member_id));
     }
     return data;
 }
 
-async function visibleResponse(tx, account, state, includeSnapshot) {
+async function visibleResponse(tx, account, state, snapshot, includeSnapshot) {
     if (account.role === 'owner') {
         const enabled = await enabledEmployees(tx);
         state.accounts = state.accounts.map(row => ({ ...row, loginEnabled: enabled.has(row.employee) }));
     }
-    return { state, ...(includeSnapshot && { snapshot: scopedSnapshot(account, state.tasks) }) };
+    return { state, ...(includeSnapshot && { snapshot: scopedSnapshot(account, state.tasks, snapshot) }) };
 }
 
 async function enabledEmployees(tx) {
@@ -30,7 +31,17 @@ async function enabledEmployees(tx) {
     return new Set(recordset.map(row => row.employee));
 }
 
-function registerTeamRoutes(app, pool, auth, { now } = {}) {
+async function persistTeamState(tx, engine, previousReminders) {
+    const { careReminders, ...state } = engine.exportState();
+    await saveTeamCareReminders(tx, previousReminders, careReminders);
+    await tx.request().input('payload', sql.NVarChar(sql.MAX), JSON.stringify(state)).query(`
+        IF EXISTS(SELECT 1 FROM dbo.TeamDemoState WHERE id=1)
+            UPDATE dbo.TeamDemoState SET payload=@payload, updated_at=SYSUTCDATETIME() WHERE id=1;
+        ELSE INSERT dbo.TeamDemoState(id,payload) VALUES(1,@payload);
+    `);
+}
+
+function registerTeamRoutes(app, pool, auth, { now, snapshot = defaultSnapshot } = {}) {
     // Register before the legacy 16 KB JSON parser: a compressed photo may be 1.4 MB.
     app.post('/api/team', require('express').json({ limit: '2mb' }), async (req, res, next) => {
         try {
@@ -39,18 +50,23 @@ function registerTeamRoutes(app, pool, auth, { now } = {}) {
             const response = await transaction(pool, async tx => {
                 const account = await auth.requireAccount(req, tx);
                 const row = await tx.request().query('SELECT payload FROM dbo.TeamDemoState WHERE id=1');
+                const reminders = await loadTeamCareReminders(tx);
                 const requestTime = now?.() ?? new Date();
                 const engine = createTeamStore(snapshot, {
                     initialState: row.recordset[0] ? JSON.parse(row.recordset[0].payload) : null,
+                    careReminders: reminders,
                     now: () => requestTime,
                 });
                 if (account.role === 'employee' && !engine.listAccounts().some(item => item.employee === account.employee))
                     throw Object.assign(new Error('员工账号不存在，请重新选择身份。'), { apiStatus: 403 });
                 if (readOnly) {
+                    // Reads also catch up overdue orders after downtime. The
+                    // SQL transaction lock serializes this with assignment.
+                    if (engine.refreshCareReminders()) await persistTeamState(tx, engine, reminders);
                     const state = engine.scopedState(account);
                     if (action === 'state' && payload.revision === state.revision && payload.calendarDate === state.calendarDate)
                         return null;
-                    return visibleResponse(tx, account, state, action === 'bootstrap' || account.role === 'employee');
+                    return visibleResponse(tx, account, state, snapshot, action === 'bootstrap' || account.role === 'employee');
                 }
                 const result = engine.applyAction(account, { ...payload, action });
                 if (action === 'assign' || action === 'reassign') {
@@ -73,13 +89,9 @@ function registerTeamRoutes(app, pool, auth, { now } = {}) {
                     if (deleted.rowsAffected[0] !== 1)
                         throw Object.assign(new Error('该员工的登录账号已变更，请刷新后重试。'), { apiStatus: 409 });
                 }
-                await tx.request().input('payload', sql.NVarChar(sql.MAX), JSON.stringify(engine.exportState())).query(`
-                    IF EXISTS(SELECT 1 FROM dbo.TeamDemoState WHERE id=1)
-                        UPDATE dbo.TeamDemoState SET payload=@payload, updated_at=SYSUTCDATETIME() WHERE id=1;
-                    ELSE INSERT dbo.TeamDemoState(id,payload) VALUES(1,@payload);
-                `);
-                return { ...(await visibleResponse(tx, account, result.state, account.role === 'employee')), taskIds: result.taskIds };
-            }, readOnly ? 'Shared' : 'Exclusive');
+                await persistTeamState(tx, engine, reminders);
+                return { ...(await visibleResponse(tx, account, result.state, snapshot, account.role === 'employee')), taskIds: result.taskIds };
+            });
             if (!response) return res.status(204).end();
             res.set('Cache-Control', 'no-store').json(response);
         } catch (error) {

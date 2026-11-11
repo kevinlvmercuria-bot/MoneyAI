@@ -10,6 +10,7 @@ async function initialize(pool) {
     await transaction(pool, async (tx) => {
         await tx.request().batch(readFileSync(path.join(__dirname, 'schema.sql'), 'utf8'));
         await require('../server/team-auth').initializeTeamAuth(tx);
+        await require('../server/team-reminders').initializeTeamCareReminders(tx);
         const { recordset } = await tx.request().query('SELECT COUNT(*) AS total FROM dbo.Members');
         if (recordset[0].total) {
             console.log('演示会员已存在，跳过初始化数据。');
