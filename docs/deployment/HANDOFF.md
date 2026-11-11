@@ -1,0 +1,79 @@
+# MoneyAI 部署交接
+
+最后核验时间为 2026-11-11（北京时间）。当前阶段为第一阶段。项目也称 NailMate AI，为美甲店提供老板娘和员工账号、顾客联系分派、反馈、备注、预约、今日待办及护理回访。目标是保留可独立运行的本地版，将新版账号工作台迁到 Neon PostgreSQL，通过 GitHub 和 Render Web Service 小范围试用。旧版 AI 审核工作台留在本地。真实收银接入等商家确认系统和订单导出能力后再安排。
+
+## 长期执行规则
+
+1. 项目状态以实际文件、Git、数据库和执行结果为准。未经验证的项目标记为待验证。
+2. 每个阶段开始前，核实上一阶段是否实际通过验收。
+3. 修改数据库、Git 历史或关键业务逻辑前，优先确认备份和回退路径。
+4. 新会话或上下文压缩后，先重读 [AGENTS.md](../../AGENTS.md) 和本文件，再核实现场并继续。
+5. 每轮只执行指定阶段，完成对应的测试、权限、安全和备份恢复要求。每轮结束后更新本文件，并区分实际结果和计划。
+
+## 四阶段路线
+
+| 阶段 | 状态 | 范围和验收 |
+| --- | --- | --- |
+| 1. 备份与建立分支 | 已通过本阶段验收 | 确认运行版本和远端关系，保护现有修改，完成源码备份和 SQL Server 备份校验，创建本地部署分支，验证本地访问。独立数据库恢复演练安排在正式试用前。 |
+| 2. 业务日期与回访待办 | 尚未开始 | 操作日期使用服务端北京时间。最近一次可信的已完成美甲服务第 21 天到期，第 20 天无待办，第 22 天未处理仍保留。按订单去重，老板娘分派后进入员工待办。已处理、约好对应维护或有更新服务记录时关闭旧提醒。验证跨午夜、停机补算和并发。 |
+| 3. Neon 迁移与数据安全 | 尚未开始 | 在独立试用库迁移新版账号、任务、反馈、备注、产品图片和回访状态。验证权限、离职交接、并发、持久化及隔离备份恢复。 |
+| 4. GitHub 与 Render 部署 | 尚未开始 | 推送部署分支后构建 Render Web Service。配置端口、HTTPS、正式登录和限流、健康检查、环境变量及定时备份。开放前初始化老板娘账号，用店内手机验证一位老板娘和一位员工的流程。实例休眠后通过访问补算回访。 |
+
+## 实际运行版本
+
+- 主工作目录为 `C:\Users\Kevin\Desktop\赚钱`，Git 根目录就是该目录。Node.js 实际版本为 `24.18.0`，项目声明 `>=22.13.0`。主入口是 Express 5 和原生 HTML、CSS、JavaScript，运行数据存放于 SQL Server。SQLite 文件 `data/nailmate.db` 用于旧版导入及部分测试。
+- `http://127.0.0.1:3000` 由 PID `61688` 的 `node.exe server/main.js` 提供。首页和新版脚本的 HTTP 响应逐字节匹配桌面仓库文件，和 Documents 副本的对应文件不匹配。SQL Server 会话同时确认该 PID 连到 `NailMate`。
+- 数据库使用本机 `localhost\SQLEXPRESS` 的 Windows 集成认证。引擎为 SQL Server Express `17.0.1000.7`，数据库兼容级别 `170`。只读检查确认有两条账号记录和一条新版状态记录，另有旧版会员、文案及来源表。敏感配置保存在本机。
+- 另一个有效仓库位于 `C:\Users\Kevin\Documents\GitHub\MoneyAI`，版本为 `3.2.0`，同样使用 Express 和 SQL Server。`C:\Users\Kevin\Desktop\NailMate-backups` 是历史备份目录，包含两个旧备份批次。
+
+| 文件 | 已核实职责或状态 |
+| --- | --- |
+| `public/index.html`、`public/workspace.js`、`public/team-workspace.js` | 新版页面及任务、会员与话术工作台 |
+| `public/team-store.js` | 共用业务逻辑。护理回访目前只在第 21 天进入推荐。分派、反馈及部分联系冷却仍取演示快照基准日 `2026-11-07`。预约和待办使用当前北京时间。 |
+| `server/main.js`、`server/db.js` | 本地服务启动、SQL Server 连接与事务锁。当前服务监听 `127.0.0.1`。 |
+| `server/team-routes.js`、`server/team-auth.js`、`database/team-auth.sql` | 新版接口、账号权限和两张新版 SQL Server 表。登录目前限制本机主机名。 |
+| `data/team-data.json`、`scripts/build-share.js` | 模拟会员快照与微信分享版构建。实际美甲完成日期仍依赖可靠的服务记录。 |
+| `public/legacy.html`、`public/workspace-legacy.js` | 本地旧版 AI 审核入口 |
+
+## Git 基线与本阶段操作
+
+GitHub API 实查的远端为 `https://github.com/kevinlvmercuria-bot/MoneyAI.git`，默认分支 `main`。直接 Git HTTPS 查询遇到连接失败，分支及 SHA 由 GitHub REST API 复核，并与本地对象比较。
+
+| 分支或副本 | 提交与关系 |
+| --- | --- |
+| 桌面 `main` 和 GitHub `main` | `31306467ea8cfb9594776569ffc997cc7426e47b`。提交相同，共同祖先就是该提交。桌面目录起初有 15 个已跟踪文件修改和 20 个未跟踪文件。 |
+| Documents 副本 `main` | `556f0d04e410f50542f9a65b3c2fdc31dbb88aad`。它是远端 `main` 的共同祖先，落后两次提交。它另有 `public/pages/members.js` 和 `server/store.js` 两处未提交的性格标签修改，已在独立备份中保留，原目录未改动。 |
+| GitHub `codex/nailmate-upload` | `09ca7b6dfa78278c4a4b401f1a0ec31d5fad7695`，在 `main` 上多一次提交，新增独立的账号版原型与分享文件。 |
+| GitHub `fix/sql-server-acceptance` | `12a389740e144064e18b1732595cb30220170c44`，与 `main` 的共同祖先为 `c8e9bfa434db5228be7a685285b6f20010c7dc25`，双方各有独立提交。 |
+| 本地 `deploy/neon-render` | 从桌面 `main` 建立。源码基线提交为 `d1a302a53c724a7cebd051058ac6a2ef200eb9c7`，包含已核对的本地新版工作台、员工和反馈优化、图表、回访逻辑及旧版兼容代码。本交接文档有单独提交，当前分支顶端可用 `git rev-parse deploy/neon-render` 查询。 |
+
+- 部署分支保持在桌面工作目录。本轮仅建立本地分支和本地提交，`main` 与远端仍在原提交。其他副本及远端专题分支的改动各自保留。
+- `.gitignore` 已增加数据库、备份、私钥、临时文件、模拟快照和生成预览的排除规则。旧 SQLite 已从部署分支最新文件树取消跟踪，磁盘文件仍在原位，祖先提交仍有该历史文件。SQLite、模拟快照、两份预览和敏感配置均保留在本地。静态产品图资源作为界面资源纳入源码。
+- 全新检出当前分支时，从受控备份另行提供 `data/team-data.json`。运行旧版来源导入或相关测试时，还需恢复本地 `data/nailmate.db`。推送前复核计划推送的提交内容和历史中已有的演示库。
+
+## 备份和恢复
+
+备份于 2026-11-11 18:09–18:11（北京时间）生成，位于两个 Git 工作区之外。根目录为 `C:\Users\Kevin\MoneyAI-backups\stage1-20261111-180956-8e11f7`。
+
+| 内容 | 位置与检查 |
+| --- | --- |
+| 桌面完整源码和本地资源 | `desktop/source`，124 个文件，共 33,994,940 字节。包含已修改及未跟踪的重要文件、模拟快照、SQLite 和两份预览。逐文件对照来源做 SHA-256 校验，见 `desktop/source-manifest.json`。 |
+| Documents 副本 | `documents/source`，69 个文件，逐文件 SHA-256 校验通过。包含两处未提交修改，见 `documents/source-manifest.json`。 |
+| 两个仓库的历史 | `desktop/history.bundle` 和 `documents/history.bundle`，均经 `git bundle verify` 并确认包含各自原始 `main`。 |
+| 本地敏感配置 | `private-config/.env.dpapi` 使用 Windows 当前用户保护加密，已验证解密内容与原件一致。跨机器或账号回退时，通过受控渠道重新配置所需值。 |
+| SQL Server `NailMate` | `sql/NailMate-stage1-copy-only.bak`，31,449,088 字节。执行了 `BACKUP DATABASE ... WITH COPY_ONLY, CHECKSUM`、`RESTORE VERIFYONLY ... WITH CHECKSUM` 和 `RESTORE HEADERONLY`。确认是同名数据库的完整副本，有备份校验和。SHA-256 为 `f77f794231a3f0c7a2f81f5a739d033ee7534a54494d735ec610cebd02a481db`，见 `sql/backup-verification.json`。 |
+
+备份目录访问权限限于当前 Windows 用户、SYSTEM 和管理员。SQL Server 服务账号另有 `sql` 子目录的写入权限。依赖目录可按锁文件重装。代码回退时，在新目录使用对应 Git bundle 和 `source` 快照恢复，先核对清单和本地配置。数据库完整恢复待验证，正式试用前把备份恢复到独立数据库和文件位置，检查账号、任务、反馈、备注及数据完整性。避免使用现有 `NailMate` 名称或数据文件作为恢复目标。
+
+[SQL Server COPY_ONLY 备份](https://learn.microsoft.com/en-us/sql/relational-databases/backup-restore/copy-only-backups-sql-server) · [SQL Server VERIFYONLY](https://learn.microsoft.com/en-us/sql/t-sql/statements/restore-statements-verifyonly-transact-sql)
+
+## 第一阶段验证
+
+- `npm run check` 通过。隔离环境的 `npm run test:team` 7 项、`npm test` 32 项和 `npm run test:legacy` 2 项全部通过。测试只使用随机命名的独立测试库及临时副本。
+- 备份后复核两份源码共 193 个文件的散列。部署分支所提交的源码来自核对过的原工作区文件。现有业务源码、模拟快照和 SQLite 的工作区字节保留，保护性忽略规则和文档单独更新。
+- 分支建立后，本地首页、新版脚本、登录会话接口返回 HTTP 200。未登录读取新版工作台数据返回 HTTP 401，原服务进程继续连接 `NailMate`。实际账号密码登录留给门店现场验证，登录权限和业务流程已在隔离测试中覆盖。
+- 待验证事项为独立数据库恢复演练，以及正式试用账号和手机的验收。收银接口、Neon 试用库和 Render 部署尚未开始。
+
+## 下一轮从这里继续
+
+先检查本文件、当前分支、备份清单和现有本地服务，确认第一阶段结果。收到第二阶段任务后，从 `public/team-store.js`、`public/team-workspace.js` 和 `server/team.test.js` 核对日期来源及现有回访规则，先处理操作日期，再验证第 20、21、22 天与重复分派。此阶段继续用隔离数据库和模拟订单。
