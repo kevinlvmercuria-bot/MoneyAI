@@ -1,6 +1,6 @@
 {
   "name": "nailmate",
-  "version": "4.0.0",
+  "version": "4.1.0",
   "private": true,
   "description": "NailMate Express API and SQL Server integration scaffold",
   "engines": {

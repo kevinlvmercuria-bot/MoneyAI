@@ -174,6 +174,11 @@ GitHub API 实查的远端为 `https://github.com/kevinlvmercuria-bot/MoneyAI.gi
 - 话术工作台的表达方式统一为自然风、可爱风、温柔风、简洁风、优雅风。Playwright 验证下拉搜索、选中显示、档案与刷新后一致，微信分享版已重建并验证。账号版 16 项和业务回归 32 项测试通过。
 - 新版本地服务由 PID `66052` 监听 `127.0.0.1:3000`。已核对首页、脚本、会话和未登录访问保护。切换前数据库备份已通过 `RESTORE VERIFYONLY WITH CHECKSUM`，文件为 `C:\Users\Kevin\MoneyAI-backups\stage1-20261111-180956-8e11f7\sql\NailMate-before-member-number-20261112-020406-4bafb050.bak`。启动日志和切换前源码差异位于 `C:\Users\Kevin\MoneyAI-backups\member-number-20261112-020406-4bafb050`。
 
+### V4.1 源码发布
+
+- 已将建档、护理回访冷却、误派撤回、推荐布局、通用档案编辑、会员编号和表达方式更新推送到 `origin/deploy/neon-render`，功能提交为 `4d4db31765e8ca1abda40e58e510b014ead681bc`。
+- V4.1 源码发布使用 Git 标签 `v4.1` 和项目版本 `4.1.0`。发布包依照 README 单独准备运行数据和本地配置。
+
 ## 下一轮从这里继续
 
 当前优先完善本地网站功能。手工建档、美甲完成登记、护理回访冷却和误派撤回已通过本地验收。收到恢复部署的指示后，从第三阶段继续，准备独立 Neon 试用库并核对迁移范围，重点包括手工档案及服务记录、`TeamCareReminders` 的唯一键、事务与访问控制。
