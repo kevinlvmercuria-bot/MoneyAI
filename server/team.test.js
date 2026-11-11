@@ -415,6 +415,8 @@ test('SQL 账号、员工资料隔离、反馈并发与持久化', { timeout: 90
         ]);
         assert.deepEqual(updates.map(item => item.status).sort(), [200, 409], '并发修改不得静默覆盖');
         const latest = (await updates.find(item => item.status === 200).json()).state.tasks[0];
+        const noteA = { action: 'note', memberId: tasks[0].member_id, type: 'care', text: '员工 A 顾客备注' };
+        assert.equal((await post(noteA)).status, 200);
         response = await post({ action: 'photo', productId: 'P001', image: 'data:image/jpeg;base64,/9j/' + 'A'.repeat(20000) });
         assert.equal(response.status, 200, '不得被旧 16 KB 请求体限制拦截');
         const reset = { ...credentials, password: 'employee-password-two' };
@@ -429,9 +431,11 @@ test('SQL 账号、员工资料隔离、反馈并发与持久化', { timeout: 90
         const restartedBase = 'http://127.0.0.1:' + server.address().port;
         const restartedRequest = await authenticate(restartedBase, 'login');
         response = await postTo(restartedRequest, restartedBase)({ action: 'state' });
-        const restored = (await response.json()).state.tasks[0];
+        const restoredState = (await response.json()).state;
+        const restored = restoredState.tasks[0];
         assert.equal(restored.result.note, latest.result.note, '重新建立应用后仍从 SQL 读取');
         assert.equal(restored.result_history.length, 2);
+        assert.ok(restoredState.notes.some(note => note.member_id === noteA.memberId && note.note_text === noteA.text));
         response = await restartedRequest(restartedBase + '/api/team', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{' });
         assert.equal(response.status, 400);
 
@@ -441,6 +445,31 @@ test('SQL 账号、员工资料隔离、反馈并发与持久化', { timeout: 90
         const replacement = engine.roster[1];
         const receiver = { username: 'handoff-worker', password: 'handoff-worker-password' };
         assert.equal((await restartedPost({ action: 'employeeAccount', employee: replacement, ...receiver })).status, 200);
+        const replacementRequest = await authenticate(restartedBase, 'login', receiver);
+        const replacementPost = postTo(replacementRequest, restartedBase);
+        const onlyB = { ...assignment(engine, 5)[4], assignee: replacement };
+        const noteB = { action: 'note', memberId: onlyB.member_id, type: 'care', text: '员工 B 顾客备注' };
+        assert.equal((await restartedPost(noteB)).status, 200);
+        const bTask = (await (await restartedPost({ action: 'assign', tasks: [onlyB] })).json()).taskIds[0];
+        const scopeA = await (await outgoingPost({ action: 'bootstrap', member_id: onlyB.member_id })).json();
+        const scopeB = await (await replacementPost({ action: 'bootstrap', member_id: tasks[0].member_id })).json();
+        assert.deepEqual(scopeA.snapshot.members.map(member => member.member_id), [tasks[0].member_id]);
+        assert.deepEqual(scopeB.snapshot.members.map(member => member.member_id), [onlyB.member_id]);
+        assert.deepEqual(scopeA.state.notes.map(note => note.note_text), [noteA.text]);
+        assert.deepEqual(scopeB.state.notes.map(note => note.note_text), [noteB.text]);
+        assert.equal((await outgoingPost({ action: 'result', id: bTask, outcome: '已沟通', note: '', message: '' })).status, 404);
+        assert.equal((await replacementPost({ action: 'result', id: result.taskIds[0], outcome: '已沟通', note: '', message: '' })).status, 404);
+        assert.equal((await replacementPost({ action: 'reassign', id: result.taskIds[0], assignee: replacement, previous: employee })).status, 403);
+        assert.equal((await outgoingRequest(restartedBase + '/api/members/' + onlyB.member_id + '/details')).status, 403);
+        assert.equal((await replacementRequest(restartedBase + '/api/members/' + tasks[0].member_id + '/details')).status, 403);
+        const session = await (await replacementRequest(restartedBase + '/api/team/auth/session', { headers: { 'X-NailMate-User': 'test-owner' } })).json();
+        assert.equal(session.user.username, receiver.username);
+        const forged = await replacementRequest(restartedBase + '/api/team', {
+            method: 'POST', headers: { 'Content-Type': 'application/json', 'X-NailMate-User': 'test-owner' },
+            body: JSON.stringify({ action: 'bootstrap' }),
+        });
+        assert.equal(forged.status, 401);
+        assert.equal((await replacementPost({ action: 'result', id: bTask, outcome: '已沟通', note: '', message: '' })).status, 200);
         const pending = await (await restartedPost({ action: 'assign', tasks: assignment(engine, 4).slice(1) })).json();
         assert.equal(pending.taskIds.length, 3);
         const [appointmentId, followUpId, assignedId] = pending.taskIds;
@@ -463,11 +492,14 @@ test('SQL 账号、员工资料隔离、反馈并发与持久化', { timeout: 90
         assert.equal(afterDeletion.snapshot.members.find(member => member.member_id === preferredMember.member_id).preferred_technician, employee);
         assert.equal((await restartedPost({ action: 'employeeAccount', employee, ...reset })).status, 400, '历史偏好技师不能被当作现有员工账号');
         assert.equal((await outgoingPost({ action: 'state' })).status, 401, '删除账号使旧会话失效');
-        const replacementRequest = await authenticate(restartedBase, 'login', receiver);
-        const handedOff = await (await postTo(replacementRequest, restartedBase)({ action: 'bootstrap' })).json();
-        assert.deepEqual(handedOff.state.tasks.map(task => task.task_id), pending.taskIds);
-        assert.equal(handedOff.state.tasks[0].result_history[0].recorded_by, employee);
-        assert.equal(handedOff.state.tasks[1].result.follow_up_on, pending.state.calendarDate);
+        const departedLogin = await fetch(restartedBase + '/api/team/auth/login', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(reset),
+        });
+        assert.equal(departedLogin.status, 401);
+        const handedOff = await (await replacementPost({ action: 'bootstrap' })).json();
+        assert.deepEqual(handedOff.state.tasks.map(task => task.task_id), [bTask, ...pending.taskIds]);
+        assert.equal(handedOff.state.tasks.find(task => task.task_id === appointmentId).result_history[0].recorded_by, employee);
+        assert.equal(handedOff.state.tasks.find(task => task.task_id === followUpId).result.follow_up_on, pending.state.calendarDate);
         response = await restartedPost({ action: 'deleteEmployeeAccount', employee: replacement, username: receiver.username, replacement: '' });
         assert.equal(response.status, 200, '最后一位员工也可删除，未完成任务留待交接');
         const unassigned = await response.json();
@@ -479,6 +511,14 @@ test('SQL 账号、员工资料隔离、反馈并发与持久化', { timeout: 90
         const resumed = (await response.json()).state.tasks.find(task => task.task_id === followUpId);
         assert.equal(resumed.assignee, employee);
         assert.equal(resumed.result.follow_up_on, pending.state.calendarDate);
+        const reopened = postTo(await authenticate(restartedBase, 'login', reset), restartedBase);
+        const freshScope = await (await reopened({ action: 'bootstrap' })).json();
+        assert.deepEqual(freshScope.state.tasks.map(task => task.task_id), [followUpId]);
+        assert.ok(!freshScope.snapshot.members.some(member => member.member_id === noteA.memberId));
+        assert.equal((await reopened({ action: 'result', id: result.taskIds[0], outcome: '已沟通', note: '', message: '', expectedRevision: 2 })).status, 404);
+        const audit = await (await restartedPost({ action: 'bootstrap' })).json();
+        assert.ok(audit.state.notes.some(note => note.note_text === noteA.text));
+        assert.equal(audit.state.tasks.find(task => task.task_id === result.taskIds[0]).result_history.length, 2);
     } finally {
         if (server) await new Promise(resolve => server.close(resolve));
         if (pool) await pool.close();

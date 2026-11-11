@@ -79,6 +79,10 @@ function teamTaskNeedsHandoff(task) {
     return Boolean(teamAppointmentPending(result) || (result?.follow_up_on && result.outcome !== '不再营销'));
 }
 
+function teamTaskBelongsTo(task, employee) {
+    return task.assignee === employee && !task.employee_access_revoked;
+}
+
 function teamValidDate(value) {
     if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
     const date = new Date(value + 'T00:00:00Z');
@@ -144,7 +148,7 @@ function teamTodoReasons(task, date) {
     function scopedState(account, clock = clockNow()) {
       requireCondition(['owner', 'employee'].includes(account.role), 403, '请先选择身份登录。');
       const owner = account.role === 'owner';
-      const tasks = owner ? store.tasks : store.tasks.filter(task => task.assignee === account.employee);
+      const tasks = owner ? store.tasks : store.tasks.filter(task => teamTaskBelongsTo(task, account.employee));
       const allowed = new Set(tasks.map(task => task.member_id));
       const notes = owner ? store.notes : store.notes.filter(note => allowed.has(note.member_id));
       const noteEdits = owner ? store.noteEdits : Object.fromEntries(Object.entries(store.noteEdits).filter(([id]) =>
@@ -315,6 +319,10 @@ function teamTodoReasons(task, date) {
             employee = field(body.newEmployee, 30, true);
             requireCondition(!/[\p{Cc}\p{Zl}\p{Zp}]/u.test(employee), 400, '请输入有效的员工姓名。');
             requireCondition(!known.includes(employee), 409, '这位员工已存在，请在列表中选择。');
+            // A new account can reuse a display name, but ownership of a
+            // departed employee's history must not follow that name.
+            for (const task of next.tasks)
+              if (task.assignee === employee) task.employee_access_revoked = true;
           }
           const username = field(body.username, 32, true).toLowerCase();
           requireCondition(/^[a-z0-9][a-z0-9._-]{2,31}$/.test(username), 400, '请填写 3–32 位的演示账号。');
@@ -327,7 +335,7 @@ function teamTodoReasons(task, date) {
           const employee = body.employee;
           const removed = next.accounts.find(item => item.role === 'employee' && item.employee === employee);
           requireCondition(removed?.username && removed.username === body.username, 409, '该员工账号已变更，请刷新后重试。');
-          const pending = next.tasks.filter(task => task.assignee === employee && teamTaskNeedsHandoff(task));
+          const pending = next.tasks.filter(task => teamTaskBelongsTo(task, employee) && teamTaskNeedsHandoff(task));
           if (pending.length) {
             requireCondition(typeof body.replacement === 'string', 409, '请选择如何交接未完成任务。');
             const replacement = body.replacement;
@@ -344,6 +352,8 @@ function teamTodoReasons(task, date) {
               taskIds.push(task.task_id);
             }
           }
+          for (const task of next.tasks)
+            if (task.assignee === employee) task.employee_access_revoked = true;
           next.accounts = next.accounts.filter(item => item !== removed);
           next.logs.push(`老板娘删除 ${employee} 的登录账号，${pending.length} 项任务${body.replacement ? '已转交' : '待交接'}。`);
           break;
@@ -388,11 +398,12 @@ function teamTodoReasons(task, date) {
           if (task.assignee !== body.assignee) {
             task.history.push(`老板娘将任务由 ${task.assignee || '待交接'} 改派给 ${body.assignee} · ${date}`);
             task.assignee = body.assignee;
+            delete task.employee_access_revoked;
           }
           break;
         }
         case 'result': {
-          const task = next.tasks.find(task => task.task_id === body.id && task.assignee === account.employee);
+          const task = next.tasks.find(task => task.task_id === body.id && teamTaskBelongsTo(task, account.employee));
           requireCondition(task, 404, '没有找到你的这项任务。');
           requireCondition(['assigned', 'recorded'].includes(task.status), 409, '当前任务不可修改反馈。');
           const previous = task.result;
