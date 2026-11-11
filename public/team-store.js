@@ -150,11 +150,15 @@ function teamTodoReasons(task, date) {
       const owner = account.role === 'owner';
       const tasks = owner ? store.tasks : store.tasks.filter(task => teamTaskBelongsTo(task, account.employee));
       const allowed = new Set(tasks.map(task => task.member_id));
-      const notes = owner ? store.notes : store.notes.filter(note => allowed.has(note.member_id));
+      const employeeId = !owner && store.accounts.find(row => row.employee === account.employee)?.account_id;
+      const notes = store.notes.filter(note => owner || allowed.has(note.member_id)).map(({ author_account_id, ...note }) => ({
+        ...note,
+        ...(employeeId && author_account_id === employeeId && { can_edit: true }),
+      }));
       const noteEdits = owner ? store.noteEdits : Object.fromEntries(Object.entries(store.noteEdits).filter(([id]) =>
         allowed.has(snapshotNotes.get(id)?.member_id) || notes.some(note => note.note_id === id)));
       return {
-        tasks, notes, noteEdits, images: store.images, revision: store.revision,
+        tasks, notes, noteEdits, images: store.images, revision: store.revision, employeeNotesEnabled: true,
         workDate: clock.date, calendarDate: clock.date,
         memberUpdates: owner ? store.memberUpdates : Object.fromEntries(Object.entries(store.memberUpdates).filter(([id]) => allowed.has(id))),
         logs: owner ? store.logs : [],
@@ -304,7 +308,7 @@ function teamTodoReasons(task, date) {
 
     function applyAction(account, body) {
       const action = body.action;
-      requireCondition(account.role === (action === 'result' ? 'employee' : 'owner'), 403, '当前账号没有这项操作权限。');
+      requireCondition(account.role === (['result', 'employeeNote'].includes(action) ? 'employee' : 'owner'), 403, '当前账号没有这项操作权限。');
       const next = structuredClone(store);
       const clock = clockNow();
       const { date, utc } = clock;
@@ -327,8 +331,9 @@ function teamTodoReasons(task, date) {
           const username = field(body.username, 32, true).toLowerCase();
           requireCondition(/^[a-z0-9][a-z0-9._-]{2,31}$/.test(username), 400, '请填写 3–32 位的演示账号。');
           requireCondition(!next.accounts.some(account => account.username === username && account.employee !== employee), 409, '这个账号名已被使用。');
-          next.accounts = next.accounts.filter(account => account.employee !== employee);
-          next.accounts.push({ employee, username, role: 'employee' });
+          const existing = next.accounts.find(account => account.employee === employee);
+          next.accounts = next.accounts.filter(account => account !== existing);
+          next.accounts.push({ ...existing, employee, username, role: 'employee' });
           break;
         }
         case 'deleteEmployeeAccount': {
@@ -457,6 +462,7 @@ function teamTodoReasons(task, date) {
           requireCondition(!body.noteId || previous?.member_id === body.memberId, 400, '备注不存在。');
           const changes = { is_pinned: Boolean(body.pinned), updated_at: utc };
           if (body.text !== undefined) {
+            requireCondition(previous?.author_role !== 'employee', 403, '员工备注由原作者修改。');
             requireCondition(noteTypes.includes(body.type), 400, '请选择备注类型。');
             Object.assign(changes, { note_text: field(body.text, 1200, true), note_type: body.type });
           }
@@ -464,6 +470,30 @@ function teamTodoReasons(task, date) {
           else {
             requireCondition(changes.note_text, 400, '请填写备注。');
             next.notes.push({ ...changes, note_id: 'NOTE-' + crypto.randomUUID(), member_id: body.memberId, author_name: '店主', author_role: 'owner', created_at: changes.updated_at });
+          }
+          break;
+        }
+        case 'employeeNote': {
+          const task = next.tasks.find(task => task.task_id === body.taskId && teamTaskBelongsTo(task, account.employee));
+          requireCondition(task && ['assigned', 'recorded'].includes(task.status), 404, '没有找到可以备注的任务。');
+          const employee = next.accounts.find(row => row.employee === account.employee);
+          requireCondition(employee, 403, '员工账号不存在。');
+          const text = field(body.text, 1200, true);
+          requireCondition(noteTypes.includes(body.type), 400, '请选择备注类型。');
+          const changes = { note_text: text, note_type: body.type, updated_at: utc };
+          if (body.noteId !== undefined) {
+            const previous = next.notes.find(note => note.note_id === body.noteId && note.member_id === task.member_id);
+            requireCondition(previous?.author_role === 'employee' && employee.account_id
+              && previous.author_account_id === employee.account_id, 404, '没有找到你可以修改的备注。');
+            const overlay = next.noteEdits[previous.note_id];
+            const revision = overlay?.revision || 0;
+            requireCondition(body.expectedRevision === revision, 409, '备注已更新，请先复制草稿，再刷新并重新编辑。');
+            next.noteEdits[previous.note_id] = { ...overlay, ...changes, revision: revision + 1 };
+          } else {
+            employee.account_id ||= crypto.randomUUID();
+            next.notes.push({ ...changes, note_id: 'NOTE-' + crypto.randomUUID(), member_id: task.member_id,
+              author_name: employee.employee, author_role: 'employee', author_account_id: employee.account_id,
+              is_pinned: false, created_at: utc });
           }
           break;
         }

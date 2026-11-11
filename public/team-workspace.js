@@ -103,7 +103,7 @@
   }
   const pageNames=['dashboard','members','campaigns','reports','products','studio','accounts'];
   const requestedPage=serverMode?new URLSearchParams(location.search).get('view'):null;
-  const ui={memberPage:1,memberFilter:'all',editNote:null,noteDrafts:{},composer:null,
+  const ui={memberPage:1,memberFilter:'all',editNote:null,noteDrafts:{},employeeNoteDrafts:{},composer:null,
     page:allowedPage(pageNames.includes(requestedPage)?requestedPage:homePage()),
     limit:3,picks:new Map(),bulkEmployee:'',flips:{},member:'M0001',employee:USER.employee,task:null,
     taskFilter:USER.employee?'今日待办':'全部',employeeFilter:'',reportStage:'booked',query:'',lifecycle:'全部',tag:'全部',taskDrafts:{}};
@@ -253,7 +253,7 @@
     const pageRows=rows.slice((ui.memberPage-1)*MEMBER_PAGE_SIZE,ui.memberPage*MEMBER_PAGE_SIZE);
     if(!rows.some(m=>m.member_id===ui.member))selectProfile(pageRows[0]?.member_id||null);
     document.getElementById('member-results').innerHTML=`<p class="member-found" role="status">找到 ${rows.length.toLocaleString('zh-CN')} 位 · 共 ${state.members.length.toLocaleString('zh-CN')} 位会员</p>
-      ${pageRows.length?`<div class="member-directory-list">${pageRows.map(m=>`<button class="member-row" data-member-detail="${m.member_id}" aria-pressed="${m.member_id===ui.member}" aria-label="打开 ${escape(m.name)} ${m.member_id} 的档案"><span class="member-avatar" aria-hidden="true">${escape(m.name[0])}</span><span class="member-row-info"><span class="member-row-title"><strong>${escape(m.name)}</strong>${profileState(m)}</span><small>${m.member_id} · ${escape(m.preference)}<br>${profileNotes(m.member_id).length} 条店主备注</small></span><span class="member-row-days">${m.days} 天<small>未到店</small></span></button>`).join('')}</div>
+      ${pageRows.length?`<div class="member-directory-list">${pageRows.map(m=>`<button class="member-row" data-member-detail="${m.member_id}" aria-pressed="${m.member_id===ui.member}" aria-label="打开 ${escape(m.name)} ${m.member_id} 的档案"><span class="member-avatar" aria-hidden="true">${escape(m.name[0])}</span><span class="member-row-info"><span class="member-row-title"><strong>${escape(m.name)}</strong>${profileState(m)}</span><small>${m.member_id} · ${escape(m.preference)}<br>${profileNotes(m.member_id).length} 条备注</small></span><span class="member-row-days">${m.days} 天<small>未到店</small></span></button>`).join('')}</div>
       <div class="member-pagination"><button data-member-page="${ui.memberPage-1}" ${ui.memberPage<=1?'disabled':''}>上一页</button><span>${ui.memberPage} / ${pages}</span><button data-member-page="${ui.memberPage+1}" ${ui.memberPage>=pages?'disabled':''}>下一页</button></div>`:'<div class="empty">没有找到符合条件的会员。<p><button data-member-clear>清空筛选</button></p></div>'}`;
     document.querySelectorAll('[data-member-filter]').forEach(button=>button.setAttribute('aria-pressed',String(button.dataset.memberFilter===ui.memberFilter)));
     const detail=document.getElementById('member-detail');
@@ -271,12 +271,21 @@
       <div class="profile-metrics"><div><span>最近到店</span><strong>${m.days} 天前</strong></div><div><span>累计消费</span><strong>${money(m.spending).replace('.00','')}</strong></div><div><span>储值余额</span><strong>${money(m.balance).replace('.00','')}</strong></div><div><span>历史消费</span><strong>${m.visit_count} 次</strong></div></div>
       <section class="profile-section"><div class="profile-section-head"><h3>个人复购周期</h3><span class="member-state active">${confidence}</span></div><div class="cycle-labels"><span>最近到店 ${escape(m.last_visit)}</span><b>今天 · ${m.days} 天</b></div><div class="personal-cycle" style="--cycle:${averagePosition}%" role="img" aria-label="个人平均周期 ${m.cycle} 天，距最近到店 ${m.days} 天，为平均周期的 ${m.ratio} 倍"><div class="personal-cycle-fill" style="width:${Math.min(100,m.days/scale*100)}%"></div><span class="personal-cycle-marker" data-label="平均 ${m.cycle} 天"></span></div><p>当前为个人平均复购周期的 <b>${m.ratio} 倍</b>，状态为“${LABELS[m.lifecycle]}”。${m.visit_count<2?'历史到店间隔不足，先使用参考周期。':'根据历史到店间隔计算，备注不直接改变周期判定。'}</p></section>
       <section class="profile-section profile-duo"><div><h3>偏好与权益</h3><dl class="profile-preferences"><dt>偏好款式</dt><dd>${escape(m.preference)}</dd><dt>偏好技师</dt><dd>${escape(m.preferred_technician||'暂无记录')}</dd><dt>储值权益</dt><dd>余额 ${money(m.balance).replace('.00','')}，不作为新增营收计算</dd><dt>加入会员</dt><dd>${escape(m.created_date)}</dd></dl></div><div><h3>营销资格检查</h3><ul class="profile-checks">${profileCheck(m.consent,m.consent?'已获得营销授权':'未获得营销授权')}${profileCheck(!m.recent,m.recent?'14 天内已有联系':'14 天内无触达')}${profileCheck(!m.complaint,m.complaint?'有未解决投诉':'无未解决投诉')}${profileCheck(!m.appointment,m.appointment?'已有未来预约':'无未来预约')}${m.care_paused?profileCheck(false,'店主已选择暂不联系'):''}</ul></div></section>
-      <section class="profile-section"><div class="profile-section-head"><h3>老板娘备注</h3><small>${notes.length} 条 · 门店内可见</small></div>${notes.length?notes.map(note=>profileNoteItem(note)).join(''):'<p class="profile-empty">还没有备注，可以记下她喜欢的款式和沟通习惯。</p>'}${noteEditor(m.member_id)}</section>
+      <section class="profile-section"><div class="profile-section-head"><h3>客户备注</h3><small>${notes.length} 条 · 门店内可见</small></div>${notes.length?notes.map(note=>profileNoteItem(note,'owner')).join(''):'<p class="profile-empty">还没有备注，可以记下她喜欢的款式和沟通习惯。</p>'}${noteEditor(m.member_id)}</section>
       <section class="profile-section"><div class="profile-section-head"><h3>护理需求</h3><button class="member-text-button" data-member-compose="care">准备护理沟通</button></div>${m.care_need_tags?`<div class="profile-care-tags">${m.care_need_tags.split('|').map(tag=>`<span>${escape(tag)}</span>`).join('')}</div><p>建议服务：${escape(m.preferred_care_service||'到店后确认')}<br>需求来源：${escape(careSource)} · 美甲后回访日 ${escape(teamCareFollowupDate(recentNailVisits.get(m.member_id)?.completed_on)||'待确认')}</p>`:'<p class="profile-empty">暂无明确护理需求，先询问本人意愿，再推荐合适服务。</p>'}<p class="muted">${escape(care.care_guidance)} ${care.care_followup_opt_in?'已同意护理跟进。':'尚未同意护理跟进，当前只能预览沟通草稿。'}</p></section>
       ${assigned?`<p class="profile-qualification">已有待联系任务 · 负责人 ${escape(assigned.assignee)} <button data-view-task="${assigned.task_id}">查看任务</button></p>`:''}
       ${restrictions.length?`<p class="profile-qualification">当前联系限制：${escape(restrictions.join('、'))}。可准备草稿，暂不可创建触达任务。</p>`:''}<div class="profile-actions"><button data-member-history="${m.member_id}">完整消费记录</button><button class="primary" data-member-compose="repurchase">根据档案准备话术</button></div></article>`;
   }
-  function profileNoteItem(note){return `<div class="profile-note"><div class="profile-note-meta"><span>${note.is_pinned?'<b class="note-pinned">置顶 · </b>':''}${escape(NOTE_LABELS[note.note_type]||note.note_type)} · ${escape(note.author_name||'店主')} · ${escape(String(note.updated_at||note.created_at).slice(0,10))}</span><button class="member-text-button" data-note-pin="${escape(note.note_id)}" aria-pressed="${Boolean(note.is_pinned)}">${note.is_pinned?'取消置顶':'置顶'}</button><button class="member-text-button" data-note-edit="${escape(note.note_id)}">编辑</button></div><p>${escape(note.note_text)}</p></div>`}
+  function profileNoteItem(note,controls){
+    const employee=note.author_role==='employee';
+    const author=employee?`员工 · ${note.author_name}`:note.author_name||'老板娘';
+    const stamp=String(note.updated_at||note.created_at||'');
+    const date=stamp.endsWith('Z')&&Number.isFinite(Date.parse(stamp))?teamBusinessClock(new Date(stamp)).date:stamp.slice(0,10);
+    const pin=controls==='owner'?`<button type="button" class="member-text-button" data-note-pin="${escape(note.note_id)}" aria-pressed="${Boolean(note.is_pinned)}">${note.is_pinned?'取消置顶':'置顶'}</button>`:'';
+    const edit=controls==='owner'&&!employee?`<button type="button" class="member-text-button" data-note-edit="${escape(note.note_id)}">编辑</button>`
+      :controls==='employee'&&note.can_edit?`<button type="button" class="member-text-button" data-employee-note-edit="${escape(note.note_id)}">编辑</button>`:'';
+    return `<article class="profile-note"><div class="profile-note-meta"><span>${note.is_pinned?'<b class="note-pinned">置顶 · </b>':''}${escape(NOTE_LABELS[note.note_type]||note.note_type)} · ${escape(author)}${date?' · '+escape(date):''}</span>${pin}${edit}</div><p>${escape(note.note_text)}</p></article>`;
+  }
   function noteEditor(id){
     const editing=ui.editNote&&profileNotes(id).find(n=>n.note_id===ui.editNote);
     const draft=ui.noteDrafts[id]||(editing?{text:editing.note_text,type:editing.note_type,pinned:editing.is_pinned}:{text:'',type:'preference',pinned:false});
@@ -442,17 +451,17 @@
     const careMode=w.objective==='care',visit=careMode?careFollowupVisit(m):null,noProduct=isNoProductObjective(w.objective),needsOffer=!noProduct&&!p;
     const relationship=w.objective==='preview'||noProduct,assigned=activeTask(m.member_id);
     const contextFact=w.objective==='preview'?['预告款式',p?offerLabel(p):'暂无匹配款式']:['上次联系',m.last_contact_date||'暂无记录'];
-    content.innerHTML=`<div class="wb-heading"><div><h2>把了解，变成一段自然的沟通。</h2><p>${ui.employee?'参考店主备注和产品信息，为自己负责的顾客准备话术。':'先看会员档案与店主备注，再准备参考话术，加入分派清单。'}</p></div><button data-page="products">打开产品与图片库</button></div>
+    content.innerHTML=`<div class="wb-heading"><div><h2>把了解，变成一段自然的沟通。</h2><p>${ui.employee?'参考客户备注和产品信息，为自己负责的顾客准备话术。':'先看会员档案与客户备注，再准备参考话术，加入分派清单。'}</p></div><button data-page="products">打开产品与图片库</button></div>
       <div class="wb-layout"><aside class="wb-context"><h3>这次，为谁准备？</h3><div class="wb-field"><label for="studio-member">选择会员</label><select id="studio-member">${state.members.map(person=>`<option value="${person.member_id}" ${person.member_id===m.member_id?'selected':''}>${person.member_id} · ${escape(person.name)} · ${LABELS[person.lifecycle]}</option>`).join('')}</select></div>
       <div class="wb-member"><span class="member-avatar" aria-hidden="true">${escape(m.name[0])}</span><div><h3>${escape(m.name)}</h3><p>${m.member_id} · ${escape(m.membership_level)} · ${LABELS[m.lifecycle]}</p></div></div>
       <dl class="wb-facts">${careMode?(visit?`<div><dt>最近美甲</dt><dd><strong>${visit.days} 天前</strong><small>${escape(visit.date)}</small></dd></div><div><dt>美甲项目</dt><dd>${escape(visit.name)}</dd></div>`:'<div><dt>近期美甲</dt><dd>暂无美甲服务记录</dd></div>'):relationship?`<div><dt>${contextFact[0]}</dt><dd>${escape(contextFact[1])}</dd></div>`:`<div><dt>未到店</dt><dd><strong>${m.days} 天</strong><small>最近到店 ${escape(m.last_visit)}</small></dd></div><div><dt>个人周期</dt><dd><strong>${m.cycle} 天</strong> · 当前 ${m.ratio} 倍</dd></div>`}<div><dt>偏好风格</dt><dd>${escape(m.preference)}</dd></div><div><dt>护理需求</dt><dd>${escape((m.care_need_tags||'待本人确认').replaceAll('|',' / '))}</dd></div></dl>
-      <section class="wb-note-section"><h3>老板娘补充的细节</h3>${notes.length?`<ul class="wb-notes">${notes.map(note=>`<li><small>${note.is_pinned?'置顶 · ':''}${escape(NOTE_LABELS[note.note_type]||'店主备注')}</small>${escape(note.note_text)}</li>`).join('')}</ul>`:'<p class="helper">暂时没有备注，可以先到会员档案补充。</p>'}${ui.employee?'':`<button data-open-profile="${m.member_id}">查看或补充会员备注</button>`}</section>
-      <details class="wb-preparation" open><summary>沟通准备 · 先了解，再推荐</summary><h4>为什么值得关注</h4><p>${careMode||noProduct||w.objective==='preview'?escape(opportunityEvidence(m,w.objective,p)):`当前为个人复购周期的 <b>${m.ratio} 倍</b>，状态为“${LABELS[m.lifecycle]}”。历史偏好与店主备注是沟通参考。`}</p><h4>待本人确认</h4><p>${noProduct?'听听顾客近况，确认是否需要协助，以及什么时候方便再联系。':w.objective==='preview'?'确认是否想看这款的配色或效果。':careMode?'这次佩戴是否舒服，甲面和甲缘状态如何，是否需要护理建议。':'近期是否仍有美甲或护理需求、上次体验如何、希望怎样被联系；未到店原因需听本人表达。'}</p><h4>这次的小目标</h4><p>${noProduct||w.objective==='preview'?escape(opportunityAction(m,w.objective,p)):w.objective==='care'?'先询问甲周、甲面及日常护理需求，确认意愿后再介绍合适服务。':'了解一条顾客明确表达的需求，或确认她喜欢的款式和方便沟通的方式。'}</p></details>
+      <section class="wb-note-section"><h3>客户备注</h3>${notes.length?`<ul class="wb-notes">${notes.map(note=>`<li><small>${note.is_pinned?'置顶 · ':''}${escape(NOTE_LABELS[note.note_type]||'备注')} · ${escape(note.author_name||'老板娘')}</small>${escape(note.note_text)}</li>`).join('')}</ul>`:'<p class="helper">暂时没有备注，可以先到会员档案补充。</p>'}${ui.employee?'':`<button data-open-profile="${m.member_id}">查看或补充会员备注</button>`}</section>
+      <details class="wb-preparation" open><summary>沟通准备 · 先了解，再推荐</summary><h4>为什么值得关注</h4><p>${careMode||noProduct||w.objective==='preview'?escape(opportunityEvidence(m,w.objective,p)):`当前为个人复购周期的 <b>${m.ratio} 倍</b>，状态为“${LABELS[m.lifecycle]}”。历史偏好与客户备注是沟通参考。`}</p><h4>待本人确认</h4><p>${noProduct?'听听顾客近况，确认是否需要协助，以及什么时候方便再联系。':w.objective==='preview'?'确认是否想看这款的配色或效果。':careMode?'这次佩戴是否舒服，甲面和甲缘状态如何，是否需要护理建议。':'近期是否仍有美甲或护理需求、上次体验如何、希望怎样被联系；未到店原因需听本人表达。'}</p><h4>这次的小目标</h4><p>${noProduct||w.objective==='preview'?escape(opportunityAction(m,w.objective,p)):w.objective==='care'?'先询问甲周、甲面及日常护理需求，确认意愿后再介绍合适服务。':'了解一条顾客明确表达的需求，或确认她喜欢的款式和方便沟通的方式。'}</p></details>
       </aside><section class="wb-output"><header class="wb-output-header"><div><h3>沟通草稿</h3><p>给 ${escape(m.name)} · ${WB_OBJECTIVES[w.objective]}</p></div><span class="pill">规则演示 · 未调用模型</span></header>
       <div class="wb-control-grid"><div class="wb-field"><label for="objective">这次想聊什么？</label><select id="objective">${Object.entries(WB_OBJECTIVES).map(([value,label])=>`<option value="${value}" ${w.objective===value?'selected':''}>${label}</option>`).join('')}</select></div><div class="wb-field"><label for="tone">表达方式</label><select id="tone"><option value="friendly" ${w.tone==='friendly'?'selected':''}>自然亲切</option><option value="brief" ${w.tone==='brief'?'selected':''}>简洁直接</option></select></div></div>
       ${noProduct?`<p class="wb-action-note"><b>本次行动</b> · ${escape(opportunityAction(m,w.objective,p))}</p>`:`<div class="wb-field"><label for="studio-product">${w.objective==='preview'?'本次预告的款式':'本次推荐的产品 / 服务'}</label><select id="studio-product">${products.map(product=>`<option value="${product.product_id}" ${p&&product.product_id===p.product_id?'selected':''}>${escape(product.product_name)} · ${escape(offerLabel(product))}</option>`).join('')}</select></div>`}
       ${p?`<div class="wb-product">${workbenchPhoto(p)}<div><h4>${escape(p.product_name)}</h4><p>${escape(p.description)}</p><div class="wb-price">${escape(offerLabel(p))}</div>${catalogSwatch(p)?'<p class="helper">AI 甲片示意图 · 款式参考</p>':catalogReference(p)?'<p class="helper">网络参考图 · 可在产品库查看来源</p>':''}${ui.employee?'':`<button data-wb-upload="${p.product_id}">${catalogPhoto(p)?'更换产品图':'上传产品实拍'}</button>`}</div></div>`:noProduct?'':`<p class="empty">${w.objective==='preview'?'暂无符合条件的预告款式。':'暂时没有匹配的在售产品，请先到产品库补充。'}</p>`}
-      <div class="wb-generate-row"><p>参考 ${notes.length} 条店主备注${noProduct?'与联系记录':'与款式或服务信息'}</p><button class="primary" data-wb-generate ${reasons.length||needsOffer?'disabled':''}>生成演示话术</button></div>
+      <div class="wb-generate-row"><p>参考 ${notes.length} 条客户备注${noProduct?'与联系记录':'与款式或服务信息'}</p><button class="primary" data-wb-generate ${reasons.length||needsOffer?'disabled':''}>生成演示话术</button></div>
       ${reasons.length?`<div class="wb-restrictions">暂不适合主动联系：${escape(reasons.join('；'))}。当前仅供内部参考。</div>`:''}
       <div class="wb-draft-label"><label for="message-draft">话术内容 · 可以直接修改</label><small id="wb-draft-count">${w.draft.length} / 1600</small></div><textarea id="message-draft" maxlength="1600" placeholder="点击“生成演示话术”，或直接写下你想说的话。">${escape(w.draft)}</textarea>
       <div class="wb-customer-preview"><h4>顾客沟通预览</h4><p>这里只展示顾客会看到的内容，内部备注和经营数据留在店内。</p><div class="wb-chat-message" id="chat-message">${escape(w.draft||'话术准备好后，会在这里显示顾客看到的消息。')}</div>${p?`<div class="wb-chat-product">${workbenchPhoto(p)}<div><strong>${escape(p.product_name)}</strong><p>${escape(offerLabel(p))}</p></div></div>`:''}</div>
@@ -657,7 +666,7 @@
       const timing=objective==='preview'?(p?offerLabel(p):'日期待确认'):(m.last_contact_date?`上次联系 ${m.last_contact_date}`:'有多次到店记录');
       return `<article class="hanger glass-track ${ui.picks.has(m.member_id)?'selected':''}" data-member="${m.member_id}"><div class="cord" aria-hidden="true"></div><div class="tilt glass-tilt"><div class="card ${flipped?'flipped':''}">
         <div class="face front glass-surface" ${flipped?'inert aria-hidden="true"':'aria-hidden="false"'}><div class="meta">${m.member_id} / ${visit?'美甲后回访':LABELS[m.lifecycle]}</div><div class="monogram" aria-hidden="true">${escape(m.name[0])}</div><h3>${escape(m.name)}</h3>${contextual?`<div class="growth-card-context"><strong>${objective==='preview'?'偏好匹配':'保持联系'}</strong><span>${escape(timing)}</span></div>`:`<div class="days"><b>${visit?visit.days:m.days}</b><span>${visit?'天前做过美甲':'天未到店'}</span></div><p class="cycle">${visit?`${escape(visit.date)} · ${escape(visit.name)}`:`个人周期 ${m.cycle} 天 · 偏离 ${m.ratio} 倍${m.cycle_confidence==='low'?'<br>历史较少 · 参考周期':''}`}</p>`}<p class="growth-card-goal">${WB_OBJECTIVES[objective]}</p><p class="growth-card-product">${escape(action)}</p><div class="actions"><button data-flip="${m.member_id}" aria-expanded="false" aria-label="查看 ${m.member_id} 推荐依据">查看依据 ↻</button><button class="primary" data-pick="${m.member_id}" aria-pressed="${ui.picks.has(m.member_id)}"><span class="pick-label">${ui.picks.has(m.member_id)?'已选 · 移除':'加入清单'}</span></button></div></div>
-        <div class="face back glass-surface" ${flipped?'aria-hidden="false"':'inert aria-hidden="true"'}><div class="meta">${m.member_id} / ${WB_OBJECTIVES[objective]}</div><h3>${escape(m.name)}</h3><h4>为什么先联系她</h4><p>${escape(opportunityEvidence(m,objective,p))}</p><h4>本次行动</h4><p>${escape(action)}</p><p class="quiet">${note?'参考店主备注：'+escape(note.note_text.slice(0,78)+(note.note_text.length>78?'…':'')):'偏好 '+escape(m.preference)+' · 已通过联系资格检查'}</p><div class="actions"><button class="primary" data-pick="${m.member_id}" aria-pressed="${ui.picks.has(m.member_id)}"><span class="pick-label">${ui.picks.has(m.member_id)?'已选 · 移除':'加入清单'}</span></button><button data-unflip="${m.member_id}">返回 ↶</button></div></div>
+        <div class="face back glass-surface" ${flipped?'aria-hidden="false"':'inert aria-hidden="true"'}><div class="meta">${m.member_id} / ${WB_OBJECTIVES[objective]}</div><h3>${escape(m.name)}</h3><h4>为什么先联系她</h4><p>${escape(opportunityEvidence(m,objective,p))}</p><h4>本次行动</h4><p>${escape(action)}</p><p class="quiet">${note?'参考客户备注：'+escape(note.note_text.slice(0,78)+(note.note_text.length>78?'…':'')):'偏好 '+escape(m.preference)+' · 已通过联系资格检查'}</p><div class="actions"><button class="primary" data-pick="${m.member_id}" aria-pressed="${ui.picks.has(m.member_id)}"><span class="pick-label">${ui.picks.has(m.member_id)?'已选 · 移除':'加入清单'}</span></button><button data-unflip="${m.member_id}">返回 ↶</button></div></div>
       </div></div></article>`;
     }).join('')}</div>`;
   }
@@ -809,8 +818,24 @@
   }
   function taskMemberNotes(task) {
     const notes=profileNotes(task.member_id);
-    return `<details class="task-owner-notes"><summary>老板娘备注 · ${notes.length} 条</summary>
-      ${notes.length?notes.map(note=>`<article class="profile-note"><div class="profile-note-meta"><span>${note.is_pinned?'<b class="note-pinned">置顶 · </b>':''}${escape(NOTE_LABELS[note.note_type]||'店主备注')} · ${escape(note.author_name||'店主')}</span></div><p>${escape(note.note_text)}</p></article>`).join(''):'<p class="helper">老板娘还没有为这位顾客添加备注。</p>'}</details>`;
+    const ownerNotes=notes.filter(note=>note.author_role!=='employee');
+    const employeeNotes=notes.filter(note=>note.author_role==='employee');
+    const editable=ui.employee&&state.employeeNotesEnabled&&['assigned','recorded'].includes(task.status);
+    return `<details class="task-owner-notes"><summary>老板娘备注 · ${ownerNotes.length} 条</summary>
+      ${ownerNotes.length?ownerNotes.map(note=>profileNoteItem(note)).join(''):'<p class="helper">暂无老板娘备注。</p>'}</details>
+      ${editable||employeeNotes.length?`<details class="task-owner-notes" open><summary>员工备注 · ${employeeNotes.length} 条</summary>
+        ${employeeNotes.map(note=>profileNoteItem(note,editable?'employee':undefined)).join('')}
+        ${editable?employeeNoteEditor(task):''}</details>`:''}`;
+  }
+  function employeeNoteEditor(task){
+    const draft=ui.employeeNoteDrafts[task.task_id]||{text:'',type:'service'};
+    return `<form id="employee-note-form" class="profile-note-form" data-task="${task.task_id}">
+      <label for="employee-note-text">${draft.noteId?'编辑我的备注':'添加员工备注'}</label>
+      <textarea id="employee-note-text" name="text" maxlength="1200" required placeholder="例如：喜欢短圆甲，下次希望保留长度。">${escape(draft.text)}</textarea>
+      <div class="profile-note-toolbar"><select name="type" aria-label="员工备注类型">${Object.entries(NOTE_LABELS).map(([value,label])=>`<option value="${value}" ${draft.type===value?'selected':''}>${label}</option>`).join('')}</select>
+      ${draft.noteId?'<button type="button" data-employee-note-cancel>取消编辑</button>':''}
+      <button class="primary" type="submit">${draft.noteId?'保存修改':'保存员工备注'}</button></div>
+      <p class="helper">老板娘和有权查看该客户的员工可见。</p></form>`;
   }
   function todoReasons(task) {
     return teamTodoReasons(task,state.calendarDate);
@@ -885,7 +910,7 @@
     const task=tasks.find(t=>t.task_id===ui.task);
     const ownerFilter=ui.employee?'':`<div class="field"><label for="employee-filter">负责人</label><select id="employee-filter">${employeeOptions(ui.employeeFilter,'全部员工')}</select></div>`;
     const title=ui.employee?`${escape(ui.employee)}的任务`:'门店联系任务';
-    content.innerHTML=`<div class="section-head"><div><h2 class="atelier-heading">${title}</h2><p class="muted">${ui.employee?'查看老板娘备注、登记反馈；顾客后来回复时可继续更新。':'按员工或状态查看任务，尚未联系的任务可以改派。'}</p></div><div class="button-row"><button type="button" data-refresh-team>刷新任务与备注</button>${ui.employee?'':'<button data-page="dashboard">去选客分派</button>'}</div></div>
+    content.innerHTML=`<div class="section-head"><div><h2 class="atelier-heading">${title}</h2><p class="muted">${ui.employee?'查看客户备注、补充员工备注并登记反馈。':'按员工或状态查看任务，尚未联系的任务可以改派。'}</p></div><div class="button-row"><button type="button" data-refresh-team>刷新任务与备注</button>${ui.employee?'':'<button data-page="dashboard">去选客分派</button>'}</div></div>
       ${ui.employee?`<section class="task-agenda" aria-label="今日待办"><div><h3>今日待办 <strong>${todos.length}</strong></h3><p>${escape(state.calendarDate)} · 待联系、到期跟进和待登记到店结果</p></div><div class="button-row"><button type="button" data-task-view="今日待办" aria-pressed="${todayOnly}">查看待办</button><button type="button" data-task-view="全部" aria-pressed="${ui.taskFilter==='全部'}">全部任务</button></div></section>`:summaryCards(taskSummary(current))}
       <div class="review-layout"><section aria-label="联系任务列表">${ownerFilter}<div class="field"><label for="task-filter">任务状态</label><select id="task-filter">${options(filters,ui.taskFilter)}</select></div>
         <p class="helper">${tasks.length} 项任务</p><div class="task-list">${tasks.map(t=>`<button data-task="${t.task_id}" aria-pressed="${ui.task===t.task_id}">${escape(member(t.member_id).name)} · ${escape(t.strategy)}<small>${awaitingHandoff(t)?'待交接':`${escape(t.assignee||'历史任务')} · ${escape(todoReasons(t).join(' · ')||STATUSES[t.status])}`}</small></button>`).join('')}</div>
@@ -950,6 +975,17 @@
         details.scrollIntoView({block:'nearest'});
       }
       if(button.dataset.taskView){ui.taskFilter=button.dataset.taskView;render();}
+      if(button.dataset.employeeNoteEdit||button.hasAttribute('data-employee-note-cancel')){
+        const task=visibleTasks().find(item=>item.task_id===ui.task);
+        if(!task)return;
+        if(button.dataset.employeeNoteEdit){
+          const note=profileNotes(task.member_id).find(item=>item.note_id===button.dataset.employeeNoteEdit&&item.can_edit);
+          if(!note)return;
+          ui.employeeNoteDrafts[task.task_id]={noteId:note.note_id,text:note.note_text,type:note.note_type,expectedRevision:note.revision||0};
+        } else delete ui.employeeNoteDrafts[task.task_id];
+        render();
+        document.getElementById('employee-note-text')?.focus();
+      }
       if(button.dataset.opportunity)selectOpportunity(button);
       if(button.dataset.careQueuePage){careQueuePage=Number(button.dataset.careQueuePage);render();}
       if(button.id==='jump-dispatch')focusDispatch();
@@ -1400,7 +1436,7 @@
     try { sessionStorage.setItem(sessionKey,JSON.stringify(USER)); } catch {}
   }
   function resetIdentityDrafts(employee) {
-    Object.assign(ui,{employee,task:null,taskFilter:employee?'今日待办':'全部',employeeFilter:'',reportStage:'booked',taskDrafts:{},noteDrafts:{},editNote:null,composer:null,flips:{},bulkEmployee:''});
+    Object.assign(ui,{employee,task:null,taskFilter:employee?'今日待办':'全部',employeeFilter:'',reportStage:'booked',taskDrafts:{},noteDrafts:{},employeeNoteDrafts:{},editNote:null,composer:null,flips:{},bulkEmployee:''});
     ui.picks.clear();
     for(const key of Object.keys(workbenchDrafts))delete workbenchDrafts[key];
     Object.assign(ui.workbench,{member_id:employee?null:'M0001',objective:'repurchase',tone:'friendly',product_id:'',draft:'',loadedKey:null,revision:0});
@@ -1507,6 +1543,9 @@
           const draft=ui.taskDrafts[task.task_id];
           if(draft?.expectedRevision!==undefined&&Number(draft.expectedRevision)!==(task.result_revision||0))
             delete ui.taskDrafts[task.task_id];
+          const noteDraft=ui.employeeNoteDrafts[task.task_id];
+          if(noteDraft?.noteId&&noteDraft.expectedRevision!==(state.noteEdits[noteDraft.noteId]?.revision||0))
+            delete ui.employeeNoteDrafts[task.task_id];
         }
       }
       render();
@@ -1516,7 +1555,7 @@
     const button=event.target.closest('[data-refresh-team]');
     if(!button)return;
     button.disabled=true;
-    try { await refreshShared(true); notify('任务与老板娘备注已刷新。'); }
+    try { await refreshShared(true); notify('任务与备注已刷新。'); }
     catch(error) { notify(error.message,true); }
     finally { if(button.isConnected)button.disabled=false; }
   });
@@ -1570,6 +1609,11 @@
   function rememberDraft(target) {
     const form=target.closest('#task-result-form');
     if(form)ui.taskDrafts[form.dataset.task]=Object.fromEntries(new FormData(form));
+    const noteForm=target.closest('#employee-note-form');
+    if(noteForm){
+      const id=noteForm.dataset.task;
+      ui.employeeNoteDrafts[id]={...ui.employeeNoteDrafts[id],...Object.fromEntries(new FormData(noteForm))};
+    }
     if(target.dataset.pickNote)ui.picks.get(target.dataset.pickNote).note=target.value;
   }
   content.addEventListener('input',event => {
@@ -1580,7 +1624,7 @@
   });
   content.addEventListener('submit',async event=>{
     const form=event.target,id=form.dataset.task;
-    if(!['dispatch-form','reassign-form','task-result-form','employee-account-form'].includes(form.id))return;
+    if(!['dispatch-form','reassign-form','task-result-form','employee-account-form','employee-note-form'].includes(form.id))return;
     event.preventDefault();
     const data=new FormData(form),button=event.submitter;
     if(button?.disabled)return;
@@ -1589,6 +1633,12 @@
       if(form.id==='dispatch-form')await assignSelected();
       if(form.id==='reassign-form')await reassignTask(id,data);
       if(form.id==='task-result-form')await saveTaskResult(id,data);
+      if(form.id==='employee-note-form'){
+        const {noteId,expectedRevision}=ui.employeeNoteDrafts[id]||{};
+        await apiAction('employeeNote',{taskId:id,noteId,expectedRevision,text:data.get('text'),type:data.get('type')});
+        delete ui.employeeNoteDrafts[id];
+        render();notify('员工备注已保存。');
+      }
       if(form.id==='employee-account-form'){
         await apiAction('employeeAccount',Object.fromEntries(data));
         render();notify('员工账号已保存。');

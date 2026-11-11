@@ -417,6 +417,23 @@ test('SQL 账号、员工资料隔离、反馈并发与持久化', { timeout: 90
         const latest = (await updates.find(item => item.status === 200).json()).state.tasks[0];
         const noteA = { action: 'note', memberId: tasks[0].member_id, type: 'care', text: '员工 A 顾客备注' };
         assert.equal((await post(noteA)).status, 200);
+        const staffNote = { action: 'employeeNote', taskId: latest.task_id, type: 'service', text: '员工记录的服务细节' };
+        assert.equal((await post(staffNote)).status, 403);
+        response = await employeePost({ ...staffNote, memberId: eligible[4].member_id, author_name: '伪造作者' });
+        assert.equal(response.status, 200);
+        const originalStaffNote = (await response.json()).state.notes.find(note => note.author_role === 'employee');
+        assert.equal(originalStaffNote.member_id, tasks[0].member_id);
+        assert.equal(originalStaffNote.author_name, employee);
+        assert.equal(originalStaffNote.can_edit, true);
+        assert.equal(originalStaffNote.author_account_id, undefined);
+        assert.equal((await post({ ...noteA, noteId: originalStaffNote.note_id })).status, 403);
+        assert.equal((await post({ action: 'note', memberId: noteA.memberId, noteId: originalStaffNote.note_id, pinned: true })).status, 200);
+        const staffEdit = { ...staffNote, noteId: originalStaffNote.note_id, text: '更新的服务细节', expectedRevision: 0 };
+        const edits = await Promise.all([employeePost(staffEdit), employeePost(staffEdit)]);
+        assert.deepEqual(edits.map(item => item.status).sort(), [200, 409]);
+        const savedStaffEdit = (await edits.find(item => item.ok).json()).state.noteEdits[originalStaffNote.note_id];
+        assert.equal(savedStaffEdit.note_text, staffEdit.text);
+        assert.equal(savedStaffEdit.is_pinned, true);
         response = await post({ action: 'photo', productId: 'P001', image: 'data:image/jpeg;base64,/9j/' + 'A'.repeat(20000) });
         assert.equal(response.status, 200, '不得被旧 16 KB 请求体限制拦截');
         const reset = { ...credentials, password: 'employee-password-two' };
@@ -436,6 +453,7 @@ test('SQL 账号、员工资料隔离、反馈并发与持久化', { timeout: 90
         assert.equal(restored.result.note, latest.result.note, '重新建立应用后仍从 SQL 读取');
         assert.equal(restored.result_history.length, 2);
         assert.ok(restoredState.notes.some(note => note.member_id === noteA.memberId && note.note_text === noteA.text));
+        assert.equal(restoredState.noteEdits[originalStaffNote.note_id].note_text, staffEdit.text);
         response = await restartedRequest(restartedBase + '/api/team', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{' });
         assert.equal(response.status, 400);
 
@@ -455,8 +473,10 @@ test('SQL 账号、员工资料隔离、反馈并发与持久化', { timeout: 90
         const scopeB = await (await replacementPost({ action: 'bootstrap', member_id: tasks[0].member_id })).json();
         assert.deepEqual(scopeA.snapshot.members.map(member => member.member_id), [tasks[0].member_id]);
         assert.deepEqual(scopeB.snapshot.members.map(member => member.member_id), [onlyB.member_id]);
-        assert.deepEqual(scopeA.state.notes.map(note => note.note_text), [noteA.text]);
+        assert.deepEqual(scopeA.state.notes.map(note => note.note_text), [noteA.text, staffNote.text]);
         assert.deepEqual(scopeB.state.notes.map(note => note.note_text), [noteB.text]);
+        assert.equal((await outgoingPost({ ...staffEdit, expectedRevision: 1, text: '重设密码后继续编辑' })).status, 200);
+        assert.equal((await replacementPost(staffNote)).status, 404);
         assert.equal((await outgoingPost({ action: 'result', id: bTask, outcome: '已沟通', note: '', message: '' })).status, 404);
         assert.equal((await replacementPost({ action: 'result', id: result.taskIds[0], outcome: '已沟通', note: '', message: '' })).status, 404);
         assert.equal((await replacementPost({ action: 'reassign', id: result.taskIds[0], assignee: replacement, previous: employee })).status, 403);
@@ -475,6 +495,10 @@ test('SQL 账号、员工资料隔离、反馈并发与持久化', { timeout: 90
         const [appointmentId, followUpId, assignedId] = pending.taskIds;
         assert.equal((await outgoingPost({ action: 'result', id: appointmentId, outcome: '已预约', note: '预约待完成', message: '' })).status, 200);
         assert.equal((await outgoingPost({ action: 'result', id: followUpId, outcome: '未回复', note: '跟进待完成', message: '', followUpOn: pending.state.calendarDate })).status, 200);
+        const handoffNote = { ...staffNote, taskId: followUpId, text: '交接后保留的员工备注' };
+        const staffHandoff = await (await outgoingPost(handoffNote)).json();
+        const handedNote = staffHandoff.state.notes.find(note => note.note_text === handoffNote.text);
+        assert.ok(handedNote);
         const deletion = { action: 'deleteEmployeeAccount', employee, username: credentials.username };
         assert.equal((await outgoingPost({ ...deletion, replacement })).status, 403);
         assert.equal((await restartedPost(deletion)).status, 409);
@@ -500,6 +524,8 @@ test('SQL 账号、员工资料隔离、反馈并发与持久化', { timeout: 90
         assert.deepEqual(handedOff.state.tasks.map(task => task.task_id), [bTask, ...pending.taskIds]);
         assert.equal(handedOff.state.tasks.find(task => task.task_id === appointmentId).result_history[0].recorded_by, employee);
         assert.equal(handedOff.state.tasks.find(task => task.task_id === followUpId).result.follow_up_on, pending.state.calendarDate);
+        assert.ok(handedOff.state.notes.some(note => note.note_id === handedNote.note_id && note.author_name === employee && !note.can_edit));
+        assert.equal((await replacementPost({ ...handoffNote, noteId: handedNote.note_id, expectedRevision: 0 })).status, 404);
         response = await restartedPost({ action: 'deleteEmployeeAccount', employee: replacement, username: receiver.username, replacement: '' });
         assert.equal(response.status, 200, '最后一位员工也可删除，未完成任务留待交接');
         const unassigned = await response.json();
@@ -515,6 +541,7 @@ test('SQL 账号、员工资料隔离、反馈并发与持久化', { timeout: 90
         const freshScope = await (await reopened({ action: 'bootstrap' })).json();
         assert.deepEqual(freshScope.state.tasks.map(task => task.task_id), [followUpId]);
         assert.ok(!freshScope.snapshot.members.some(member => member.member_id === noteA.memberId));
+        assert.equal((await reopened({ ...handoffNote, noteId: handedNote.note_id, expectedRevision: 0 })).status, 404);
         assert.equal((await reopened({ action: 'result', id: result.taskIds[0], outcome: '已沟通', note: '', message: '', expectedRevision: 2 })).status, 404);
         const audit = await (await restartedPost({ action: 'bootstrap' })).json();
         assert.ok(audit.state.notes.some(note => note.note_text === noteA.text));
