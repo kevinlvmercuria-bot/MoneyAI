@@ -5,7 +5,7 @@ const assert = require('node:assert/strict');
 const { randomBytes } = require('node:crypto');
 const { authenticate } = require('./test-auth-client');
 const snapshot = require('../data/team-data.json');
-const { createTeamStore, teamBusinessClock, teamTodoReasons } = require('../public/team-store');
+const { createTeamStore, teamBusinessClock, teamMemberRecency, teamTodoReasons } = require('../public/team-store');
 const { teamChartStages, teamChartTaskGroups, teamResultChart } = require('../public/team-chart');
 const owner = { role: 'owner', employee: '' };
 const eligible = snapshot.members.filter(m => m.marketing_consent && !m.unresolved_complaint && !m.has_upcoming_appointment && m.data_completeness >= .8 &&
@@ -121,6 +121,33 @@ test('业务日期按北京时间跨零点，冷却满 14 个自然日后解除�
     assert.throws(() => restarted.applyAction(owner, { action: 'assign', tasks }), /14 天内已联系/);
     now = new Date('2026-11-28T16:00:00Z');
     assert.equal(restarted.applyAction(owner, { action: 'assign', tasks }).state.tasks[1].assigned_on, '2026-11-29');
+});
+
+test('复购天数、周期倍数和生命周期按北京时间跨日更新', () => {
+    const before = teamBusinessClock(new Date('2026-11-11T15:59:59Z')).date;
+    const after = teamBusinessClock(new Date('2026-11-11T16:00:00Z')).date;
+    const customer = { last_visit: '2026-07-02', average_cycle_days: 33, days_since_last_visit: 128, overdue_ratio: 3.88 };
+    assert.deepEqual(teamMemberRecency(customer, before), { days: 132, ratio: 4, lifecycle: 'dormant' });
+    assert.deepEqual(teamMemberRecency(customer, after), { days: 133, ratio: 4.03, lifecycle: 'dormant' });
+    const nearingCycle = { last_visit: '2026-10-19', average_cycle_days: 20 };
+    assert.deepEqual(teamMemberRecency(nearingCycle, before), { days: 23, ratio: 1.15, lifecycle: 'active' });
+    assert.deepEqual(teamMemberRecency(nearingCycle, after), { days: 24, ratio: 1.2, lifecycle: 'due' });
+    for (const last_visit of ['', '2026-02-30', '2026-11-13'])
+        assert.deepEqual(teamMemberRecency({ ...customer, last_visit }, after), { days: null, ratio: null, lifecycle: 'unknown' });
+});
+
+test('新品预告服务端复核随日期更新的活跃状态', () => {
+    const member = { ...eligible[0], last_visit: '2026-10-19', average_cycle_days: 20, lifecycle: 'active',
+        preferred_styles: '裸色', last_contact_date: '' };
+    const fixture = { ...snapshot, members: [member], orders: [], appointments: [] };
+    const makeStore = date => createTeamStore(fixture, { now: () => new Date(date) });
+    const before = makeStore('2026-11-11T15:59:59Z');
+    const [input] = assignment(before);
+    Object.assign(input, { objective: 'preview', product_id: 'IDEA-SEA-SALT' });
+    const assign = { action: 'assign', tasks: [input] };
+    assert.equal(before.applyAction(owner, assign).state.tasks.length, 1);
+    const after = makeStore('2026-11-11T16:00:00Z');
+    assert.throws(() => after.applyAction(owner, assign), /不符合新品预告条件/);
 });
 
 test('旧反馈使用实际 UTC 审计时间恢复冷却口径，保留原始历史', () => {

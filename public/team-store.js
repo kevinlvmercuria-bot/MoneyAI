@@ -54,6 +54,18 @@ function teamDaysBetween(later, earlier) {
     return (Date.parse(later) - Date.parse(earlier)) / 86400000;
 }
 
+function teamMemberRecency(member, date) {
+    const elapsed = teamValidDate(member.last_visit) ? teamDaysBetween(date, member.last_visit) : NaN;
+    const days = Number.isFinite(elapsed) && elapsed >= 0 ? elapsed : null;
+    const cycle = member.average_cycle_days;
+    if (days === null || !Number.isFinite(cycle) || cycle <= 0)
+        return { days, ratio: null, lifecycle: 'unknown' };
+
+    const ratio = Number((days / cycle).toFixed(2));
+    const lifecycle = ratio <= 1.15 ? 'active' : ratio <= 1.65 ? 'due' : ratio <= 2.4 ? 'low_frequency' : 'dormant';
+    return { days, ratio, lifecycle };
+}
+
 function teamHasRecentContact(date, lastContact) {
     return Boolean(lastContact && teamDaysBetween(date, lastContact) < 14);
 }
@@ -300,7 +312,8 @@ function teamTodoReasons(task, date) {
       if (objective === 'care' && !careProfiles.get(id)?.care_followup_opt_in) reasons.push('未同意护理跟进');
       if (objective === 'preview') {
         const untilLaunch = teamDaysBetween(product?.launch_date, date);
-        if (m.lifecycle !== 'active' || product?.product_type !== 'nail_style' || !(untilLaunch >= 1 && untilLaunch <= 14)
+        const { lifecycle } = teamMemberRecency({ ...m, ...update }, date);
+        if (lifecycle !== 'active' || product?.product_type !== 'nail_style' || !(untilLaunch >= 1 && untilLaunch <= 14)
           || !m.preferred_styles.split('|').includes(product.style)) reasons.push('不符合新品预告条件');
       }
       return reasons;
@@ -512,4 +525,4 @@ function teamTodoReasons(task, date) {
     return { roster, scopedState, applyAction, refreshCareReminders, listAccounts: () => store.accounts.map(({ employee, username }) => ({ employee, username })), exportState: () => structuredClone(store) };
   }
 
-if (typeof module !== 'undefined') module.exports = { createTeamStore, teamBusinessClock, teamCalendarTime, teamTodoReasons, teamAppointmentPending, teamTaskNeedsHandoff, teamCareReminderKey };
+if (typeof module !== 'undefined') module.exports = { createTeamStore, teamBusinessClock, teamCalendarTime, teamTodoReasons, teamAppointmentPending, teamTaskNeedsHandoff, teamCareReminderKey, teamMemberRecency };

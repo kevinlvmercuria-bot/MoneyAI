@@ -49,7 +49,7 @@
   const AS_OF = DATA.as_of_date;
   let WORK_DATE=AS_OF;
   const daysBetween=teamDaysBetween;
-  const LABELS = {active:'活跃',due:'待复购',low_frequency:'低频',dormant:'沉睡'};
+  const LABELS = {active:'活跃',due:'待复购',low_frequency:'低频',dormant:'沉睡',unknown:'待确认'};
   const STATUSES = {assigned:'待联系',recorded:'已记录',archived:'已归档',executed_simulated:'历史模拟记录'};
   const OUTCOMES = ['未回复','有意向','已预约','已沟通','暂不联系','不再营销'];
   let baseMembers,memberNoteIndex,memberOrderIndex,servicesByMember,memberCareIndex,memberProductIndex,scheduledAppointments;
@@ -57,8 +57,7 @@
   function indexSnapshot(data) {
     DATA=data;
     baseMembers=data.members.map(m=>({...m,name:m.display_name,cycle:m.average_cycle_days,
-      days:m.days_since_last_visit,spending:m.total_spending,balance:m.stored_balance,
-      ratio:m.overdue_ratio,preference:m.preferred_styles.replaceAll('|',' / '),
+      spending:m.total_spending,balance:m.stored_balance,preference:m.preferred_styles.replaceAll('|',' / '),
       consent:m.marketing_consent,complaint:m.unresolved_complaint,appointment:m.has_upcoming_appointment}));
     memberNoteIndex=bucketMemberRows(data.member_notes);
     scheduledAppointments=teamLatestScheduledAppointments(data.appointments);
@@ -85,6 +84,7 @@
     WORK_DATE=shared.workDate;
     const members=visibleMembers.map(base=>{
       const m={...base,...shared.memberUpdates[base.member_id]};
+      Object.assign(m,teamMemberRecency(m,WORK_DATE));
       m.recent=teamHasRecentContact(WORK_DATE,m.last_contact_date);
       m.appointment=Boolean(shared.memberUpdates[base.member_id]?.appointment
         || (scheduledAppointments.get(m.member_id)||'')>=WORK_DATE);
@@ -253,7 +253,7 @@
     const pageRows=rows.slice((ui.memberPage-1)*MEMBER_PAGE_SIZE,ui.memberPage*MEMBER_PAGE_SIZE);
     if(!rows.some(m=>m.member_id===ui.member))selectProfile(pageRows[0]?.member_id||null);
     document.getElementById('member-results').innerHTML=`<p class="member-found" role="status">找到 ${rows.length.toLocaleString('zh-CN')} 位 · 共 ${state.members.length.toLocaleString('zh-CN')} 位会员</p>
-      ${pageRows.length?`<div class="member-directory-list">${pageRows.map(m=>`<button class="member-row" data-member-detail="${m.member_id}" aria-pressed="${m.member_id===ui.member}" aria-label="打开 ${escape(m.name)} ${m.member_id} 的档案"><span class="member-avatar" aria-hidden="true">${escape(m.name[0])}</span><span class="member-row-info"><span class="member-row-title"><strong>${escape(m.name)}</strong>${profileState(m)}</span><small>${m.member_id} · ${escape(m.preference)}<br>${profileNotes(m.member_id).length} 条备注</small></span><span class="member-row-days">${m.days} 天<small>未到店</small></span></button>`).join('')}</div>
+      ${pageRows.length?`<div class="member-directory-list">${pageRows.map(m=>`<button class="member-row" data-member-detail="${m.member_id}" aria-pressed="${m.member_id===ui.member}" aria-label="打开 ${escape(m.name)} ${m.member_id} 的档案"><span class="member-avatar" aria-hidden="true">${escape(m.name[0])}</span><span class="member-row-info"><span class="member-row-title"><strong>${escape(m.name)}</strong>${profileState(m)}</span><small>${m.member_id} · ${escape(m.preference)}<br>${profileNotes(m.member_id).length} 条备注</small></span><span class="member-row-days">${m.days===null?'—<small>日期待确认</small>':m.days+' 天<small>未到店</small>'}</span></button>`).join('')}</div>
       <div class="member-pagination"><button data-member-page="${ui.memberPage-1}" ${ui.memberPage<=1?'disabled':''}>上一页</button><span>${ui.memberPage} / ${pages}</span><button data-member-page="${ui.memberPage+1}" ${ui.memberPage>=pages?'disabled':''}>下一页</button></div>`:'<div class="empty">没有找到符合条件的会员。<p><button data-member-clear>清空筛选</button></p></div>'}`;
     document.querySelectorAll('[data-member-filter]').forEach(button=>button.setAttribute('aria-pressed',String(button.dataset.memberFilter===ui.memberFilter)));
     const detail=document.getElementById('member-detail');
@@ -265,16 +265,22 @@
     const care=memberCareIndex.get(m.member_id),notes=profileNotes(m.member_id),restrictions=memberBlockers(m);
     const assigned=activeTask(m.member_id);
     const careSource=CARE_SOURCE_LABELS[care.care_need_source]||'待确认';
-    const scale=Math.max(m.cycle*3.6,m.days+10),averagePosition=Math.max(12,Math.min(82,m.cycle/scale*100));
     const confidence={high:'高置信度',medium:'中等置信度',low:'历史记录较少'}[m.cycle_confidence]||'参考周期';
+    const latestVisit=m.days===null?'日期待确认':m.days===0?'今天':`${m.days} 天前`;
     return `<article class="member-sheet"><header class="profile-topline"><div class="profile-identity"><span class="member-avatar" aria-hidden="true">${escape(m.name[0])}</span><div><div class="profile-name"><h2>${escape(m.name)}</h2>${profileState(m)}</div><p class="profile-subtitle">${m.member_id} · ${escape(m.membership_level)} · 档案完整度 ${Math.round(m.data_completeness*100)}%</p></div></div><button class="member-text-button" data-member-history="${m.member_id}">查看消费记录</button></header>
-      <div class="profile-metrics"><div><span>最近到店</span><strong>${m.days} 天前</strong></div><div><span>累计消费</span><strong>${money(m.spending).replace('.00','')}</strong></div><div><span>储值余额</span><strong>${money(m.balance).replace('.00','')}</strong></div><div><span>历史消费</span><strong>${m.visit_count} 次</strong></div></div>
-      <section class="profile-section"><div class="profile-section-head"><h3>个人复购周期</h3><span class="member-state active">${confidence}</span></div><div class="cycle-labels"><span>最近到店 ${escape(m.last_visit)}</span><b>今天 · ${m.days} 天</b></div><div class="personal-cycle" style="--cycle:${averagePosition}%" role="img" aria-label="个人平均周期 ${m.cycle} 天，距最近到店 ${m.days} 天，为平均周期的 ${m.ratio} 倍"><div class="personal-cycle-fill" style="width:${Math.min(100,m.days/scale*100)}%"></div><span class="personal-cycle-marker" data-label="平均 ${m.cycle} 天"></span></div><p>当前为个人平均复购周期的 <b>${m.ratio} 倍</b>，状态为“${LABELS[m.lifecycle]}”。${m.visit_count<2?'历史到店间隔不足，先使用参考周期。':'根据历史到店间隔计算，备注不直接改变周期判定。'}</p></section>
+      <div class="profile-metrics"><div><span>最近到店</span><strong>${latestVisit}</strong></div><div><span>累计消费</span><strong>${money(m.spending).replace('.00','')}</strong></div><div><span>储值余额</span><strong>${money(m.balance).replace('.00','')}</strong></div><div><span>历史消费</span><strong>${m.visit_count} 次</strong></div></div>
+      <section class="profile-section"><div class="profile-section-head"><h3>个人复购周期</h3><span class="member-state active">${confidence}</span></div>${profileCycle(m)}</section>
       <section class="profile-section profile-duo"><div><h3>偏好与权益</h3><dl class="profile-preferences"><dt>偏好款式</dt><dd>${escape(m.preference)}</dd><dt>偏好技师</dt><dd>${escape(m.preferred_technician||'暂无记录')}</dd><dt>储值权益</dt><dd>余额 ${money(m.balance).replace('.00','')}，不作为新增营收计算</dd><dt>加入会员</dt><dd>${escape(m.created_date)}</dd></dl></div><div><h3>营销资格检查</h3><ul class="profile-checks">${profileCheck(m.consent,m.consent?'已获得营销授权':'未获得营销授权')}${profileCheck(!m.recent,m.recent?'14 天内已有联系':'14 天内无触达')}${profileCheck(!m.complaint,m.complaint?'有未解决投诉':'无未解决投诉')}${profileCheck(!m.appointment,m.appointment?'已有未来预约':'无未来预约')}${m.care_paused?profileCheck(false,'店主已选择暂不联系'):''}</ul></div></section>
       <section class="profile-section"><div class="profile-section-head"><h3>客户备注</h3><small>${notes.length} 条 · 门店内可见</small></div>${notes.length?notes.map(note=>profileNoteItem(note,'owner')).join(''):'<p class="profile-empty">还没有备注，可以记下她喜欢的款式和沟通习惯。</p>'}${noteEditor(m.member_id)}</section>
       <section class="profile-section"><div class="profile-section-head"><h3>护理需求</h3><button class="member-text-button" data-member-compose="care">准备护理沟通</button></div>${m.care_need_tags?`<div class="profile-care-tags">${m.care_need_tags.split('|').map(tag=>`<span>${escape(tag)}</span>`).join('')}</div><p>建议服务：${escape(m.preferred_care_service||'到店后确认')}<br>需求来源：${escape(careSource)} · 美甲后回访日 ${escape(teamCareFollowupDate(recentNailVisits.get(m.member_id)?.completed_on)||'待确认')}</p>`:'<p class="profile-empty">暂无明确护理需求，先询问本人意愿，再推荐合适服务。</p>'}<p class="muted">${escape(care.care_guidance)} ${care.care_followup_opt_in?'已同意护理跟进。':'尚未同意护理跟进，当前只能预览沟通草稿。'}</p></section>
       ${assigned?`<p class="profile-qualification">已有待联系任务 · 负责人 ${escape(assigned.assignee)} <button data-view-task="${assigned.task_id}">查看任务</button></p>`:''}
       ${restrictions.length?`<p class="profile-qualification">当前联系限制：${escape(restrictions.join('、'))}。可准备草稿，暂不可创建触达任务。</p>`:''}<div class="profile-actions"><button data-member-history="${m.member_id}">完整消费记录</button><button class="primary" data-member-compose="repurchase">根据档案准备话术</button></div></article>`;
+  }
+  function profileCycle(m){
+    if(m.ratio===null)return '<p>补齐最近到店日期和个人平均周期后，可查看复购进度。</p>';
+    const scale=Math.max(m.cycle*3.6,m.days+10);
+    const averagePosition=Math.max(12,Math.min(82,m.cycle/scale*100));
+    return `<div class="cycle-labels"><span>最近到店 ${escape(m.last_visit)}</span><b>今天 · ${m.days} 天</b></div><div class="personal-cycle" style="--cycle:${averagePosition}%" role="img" aria-label="个人平均周期 ${m.cycle} 天，距最近到店 ${m.days} 天，为平均周期的 ${m.ratio} 倍"><div class="personal-cycle-fill" style="width:${Math.min(100,m.days/scale*100)}%"></div><span class="personal-cycle-marker" data-label="平均 ${m.cycle} 天"></span></div><p>当前为个人平均复购周期的 <b>${m.ratio} 倍</b>，状态为“${LABELS[m.lifecycle]}”。${m.visit_count<2?'历史到店间隔不足，先使用参考周期。':'个人平均周期根据历史到店间隔计算。'}</p>`;
   }
   function profileNoteItem(note,controls){
     const employee=note.author_role==='employee';
@@ -464,9 +470,9 @@
     content.innerHTML=`<div class="wb-heading"><div><h2>把了解，变成一段自然的沟通。</h2><p>${ui.employee?'参考客户备注和产品信息，为自己负责的顾客准备话术。':'先看会员档案与客户备注，再准备参考话术，加入分派清单。'}</p></div><button data-page="products">打开产品与图片库</button></div>
       <div class="wb-layout"><aside class="wb-context"><h3>这次，为谁准备？</h3><div class="wb-field"><label for="studio-member">选择会员</label><select id="studio-member">${state.members.map(person=>`<option value="${person.member_id}" ${person.member_id===m.member_id?'selected':''}>${person.member_id} · ${escape(person.name)} · ${LABELS[person.lifecycle]}</option>`).join('')}</select></div>
       <div class="wb-member"><span class="member-avatar" aria-hidden="true">${escape(m.name[0])}</span><div><h3>${escape(m.name)}</h3><p>${m.member_id} · ${escape(m.membership_level)} · ${LABELS[m.lifecycle]}</p></div></div>
-      <dl class="wb-facts">${careMode?(visit?`<div><dt>最近美甲</dt><dd><strong>${visit.days} 天前</strong><small>${escape(visit.date)}</small></dd></div><div><dt>美甲项目</dt><dd>${escape(visit.name)}</dd></div>`:'<div><dt>近期美甲</dt><dd>暂无美甲服务记录</dd></div>'):relationship?`<div><dt>${contextFact[0]}</dt><dd>${escape(contextFact[1])}</dd></div>`:`<div><dt>未到店</dt><dd><strong>${m.days} 天</strong><small>最近到店 ${escape(m.last_visit)}</small></dd></div><div><dt>个人周期</dt><dd><strong>${m.cycle} 天</strong> · 当前 ${m.ratio} 倍</dd></div>`}<div><dt>偏好风格</dt><dd>${escape(m.preference)}</dd></div><div><dt>护理需求</dt><dd>${escape((m.care_need_tags||'待本人确认').replaceAll('|',' / '))}</dd></div></dl>
+      <dl class="wb-facts">${careMode?(visit?`<div><dt>最近美甲</dt><dd><strong>${visit.days} 天前</strong><small>${escape(visit.date)}</small></dd></div><div><dt>美甲项目</dt><dd>${escape(visit.name)}</dd></div>`:'<div><dt>近期美甲</dt><dd>暂无美甲服务记录</dd></div>'):relationship?`<div><dt>${contextFact[0]}</dt><dd>${escape(contextFact[1])}</dd></div>`:`<div><dt>未到店</dt><dd><strong>${m.days===null?'日期待确认':m.days+' 天'}</strong>${m.days===null?'':`<small>最近到店 ${escape(m.last_visit)}</small>`}</dd></div><div><dt>个人周期</dt><dd>${m.ratio===null?'周期待确认':`<strong>${m.cycle} 天</strong> · 当前 ${m.ratio} 倍`}</dd></div>`}<div><dt>偏好风格</dt><dd>${escape(m.preference)}</dd></div><div><dt>护理需求</dt><dd>${escape((m.care_need_tags||'待本人确认').replaceAll('|',' / '))}</dd></div></dl>
       <section class="wb-note-section"><h3>客户备注</h3>${notes.length?`<ul class="wb-notes">${notes.map(note=>`<li><small>${note.is_pinned?'置顶 · ':''}${escape(NOTE_LABELS[note.note_type]||'备注')} · ${escape(note.author_name||'老板娘')}</small>${escape(note.note_text)}</li>`).join('')}</ul>`:'<p class="helper">暂时没有备注，可以先到会员档案补充。</p>'}${ui.employee?'':`<button data-open-profile="${m.member_id}">查看或补充会员备注</button>`}</section>
-      <details class="wb-preparation" open><summary>沟通准备 · 先了解，再推荐</summary><h4>为什么值得关注</h4><p>${careMode||noProduct||w.objective==='preview'?escape(opportunityEvidence(m,w.objective,p)):`当前为个人复购周期的 <b>${m.ratio} 倍</b>，状态为“${LABELS[m.lifecycle]}”。历史偏好与客户备注是沟通参考。`}</p><h4>待本人确认</h4><p>${noProduct?'听听顾客近况，确认是否需要协助，以及什么时候方便再联系。':w.objective==='preview'?'确认是否想看这款的配色或效果。':careMode?'这次佩戴是否舒服，甲面和甲缘状态如何，是否需要护理建议。':'近期是否仍有美甲或护理需求、上次体验如何、希望怎样被联系；未到店原因需听本人表达。'}</p><h4>这次的小目标</h4><p>${noProduct||w.objective==='preview'?escape(opportunityAction(m,w.objective,p)):w.objective==='care'?'先询问甲周、甲面及日常护理需求，确认意愿后再介绍合适服务。':'了解一条顾客明确表达的需求，或确认她喜欢的款式和方便沟通的方式。'}</p></details>
+      <details class="wb-preparation" open><summary>沟通准备 · 先了解，再推荐</summary><h4>为什么值得关注</h4><p>${careMode||noProduct||m.ratio===null||w.objective==='preview'?escape(opportunityEvidence(m,w.objective,p)):`当前为个人复购周期的 <b>${m.ratio} 倍</b>，状态为“${LABELS[m.lifecycle]}”。历史偏好与客户备注是沟通参考。`}</p><h4>待本人确认</h4><p>${noProduct?'听听顾客近况，确认是否需要协助，以及什么时候方便再联系。':w.objective==='preview'?'确认是否想看这款的配色或效果。':careMode?'这次佩戴是否舒服，甲面和甲缘状态如何，是否需要护理建议。':'近期是否仍有美甲或护理需求、上次体验如何、希望怎样被联系；未到店原因需听本人表达。'}</p><h4>这次的小目标</h4><p>${noProduct||w.objective==='preview'?escape(opportunityAction(m,w.objective,p)):w.objective==='care'?'先询问甲周、甲面及日常护理需求，确认意愿后再介绍合适服务。':'了解一条顾客明确表达的需求，或确认她喜欢的款式和方便沟通的方式。'}</p></details>
       </aside><section class="wb-output"><header class="wb-output-header"><div><h3>沟通草稿</h3><p>给 ${escape(m.name)} · ${WB_OBJECTIVES[w.objective]}</p></div><span class="pill">规则演示 · 未调用模型</span></header>
       <div class="wb-control-grid"><div class="wb-field"><label for="objective">这次想聊什么？</label><select id="objective">${Object.entries(WB_OBJECTIVES).map(([value,label])=>`<option value="${value}" ${w.objective===value?'selected':''}>${label}</option>`).join('')}</select></div><div class="wb-field"><label for="tone">表达方式</label><select id="tone">${Object.entries(WB_TONE_LABELS).map(([value,label])=>`<option value="${value}" ${w.tone===value?'selected':''}>${label}</option>`).join('')}</select></div></div>
       ${noProduct?`<p class="wb-action-note"><b>本次行动</b> · ${escape(opportunityAction(m,w.objective,p))}</p>`:`<div class="wb-field"><label for="studio-product">${w.objective==='preview'?'本次预告的款式':'本次推荐的产品 / 服务'}</label><select id="studio-product">${products.map(product=>`<option value="${product.product_id}" ${p&&product.product_id===p.product_id?'selected':''}>${escape(product.product_name)} · ${escape(offerLabel(product))}</option>`).join('')}</select></div>`}
@@ -655,13 +661,15 @@
       return match?`活跃会员，档案偏好「${preferred}」；「${match.product_name}」演示计划于 ${match.launch_date} 上架，可以先分享灵感、询问是否想看款。`:'当前没有匹配且临近上架的款式预告。';
     }
     if(objective==='greeting')return m.last_contact_date?`活跃会员，上次主动联系是 ${m.last_contact_date}。可以发一条简短问候，听听近况。`:'活跃会员，有多次到店记录；当前没有近期联系记录，可以发一条简短问候。';
-    if(objective==='balance')return `已有 ${money(m.balance).replace('.00','')} 可用余额，${m.days} 天未到店。先提醒已有权益，再询问是否想换款。`;
+    if(objective==='balance')return `已有 ${money(m.balance).replace('.00','')} 可用余额。${m.days===null?'':m.days+' 天未到店。'}先提醒已有权益，再询问是否想换款。`;
     if(objective==='care'){
       const visit=careFollowupVisit(m);
       return visit
         ? `${visit.date} 做了「${visit.name}」，已过 ${visit.days} 天。先确认佩戴是否舒服、甲面和甲缘状态如何，再按反馈提供护理建议。`
         : '暂无美甲服务记录。';
     }
+    if(m.days===null)return '最近到店日期待确认。';
+    if(m.ratio===null)return `${m.days} 天未到店，个人复购周期待确认。`;
     return `${m.days} 天未到店，个人周期 ${m.cycle} 天，已到 ${m.ratio} 倍。${m.cycle_confidence==='low'?'历史较少，周期仅供参考。':'先了解近期需求，不推测未到店原因。'}`;
   }
   function opportunityProduct(m,objective){return workbenchProducts(m,objective)[0]}
@@ -1692,8 +1700,10 @@
   setupGlassControls(dock);
   setupGlassControls(document.querySelector('footer'));
   render();
-  if(serverMode&&USER.role!=='guest') {
-    const sync=()=>refreshShared().catch(()=>{});
+  if(!serverMode||USER.role!=='guest') {
+    const sync=()=>{
+      if(USER.role!=='guest'&&(serverMode||teamBusinessClock().date!==state.calendarDate))refreshShared().catch(()=>{});
+    };
     setInterval(sync,5000);
     document.addEventListener('visibilitychange',sync);
     window.addEventListener('pageshow',event=>{if(event.persisted)sync();});
