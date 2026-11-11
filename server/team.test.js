@@ -233,6 +233,121 @@ test('真实顾客只有确认完成且带完成日的美甲服务可以产生�
     ]);
 });
 
+test('手工建档、完成登记及更正，订单回访跳过冷却，撤回释放原提醒', () => {
+    let now = new Date('2026-11-08T04:00:00Z');
+    const engine = createTeamStore(snapshot, { now: () => now });
+    const employee = { role: 'employee', employee: engine.roster[0] };
+    const create = { action: 'registerMember', requestId: 'aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa',
+        name: '手工测试顾客', careOptIn: true, marketingConsent: true };
+    assert.throws(() => engine.applyAction(employee, create), /权限/);
+    const { memberId } = engine.applyAction(owner, create);
+    assert.equal(engine.applyAction(owner, create).memberId, memberId);
+    assert.equal(engine.workspaceSnapshot().members.filter(member => member.member_id === memberId).length, 1);
+    const task = { ...assignment(engine)[0], member_id: memberId };
+    const assign = input => engine.applyAction(owner, { action: 'assign', tasks: [input] }).taskIds[0];
+    const contact = id => engine.applyAction(employee, { action: 'result', id, outcome: '已沟通', note: '', message: '' });
+    contact(assign(task));
+
+    now = new Date('2026-11-11T04:00:00Z');
+    const service = { action: 'registerService', memberId, requestId: 'bbbbbbbb-bbbb-4bbb-bbbb-bbbbbbbbbbbb', completedOn: '2026-11-10' };
+    assert.throws(() => engine.applyAction(owner, { ...service, completedOn: '2026-11-12' }), /实际服务完成日期/);
+    assert.throws(() => engine.applyAction(employee, service), /权限/);
+    engine.applyAction(owner, service);
+    engine.applyAction(owner, service);
+    const manual = () => engine.workspaceSnapshot().orders.filter(order => order.member_id === memberId);
+    assert.equal(manual().length, 1);
+    const orderId = manual()[0].order_id;
+    assert.equal(manual()[0].data_type, 'real');
+    assert.throws(() => engine.applyAction(owner, { ...service, requestId: create.requestId }), /当天已登记/);
+    const correction = { action: 'registerService', memberId, orderId, expectedCompletedOn: '2026-11-10', completedOn: '2026-11-11' };
+    engine.applyAction(owner, correction);
+    assert.throws(() => engine.applyAction(owner, { ...correction, completedOn: '2026-11-09' }), /日期已更新/);
+    assert.equal(engine.workspaceSnapshot().members.find(member => member.member_id === memberId).last_visit, '2026-11-11');
+    const reminder = () => engine.scopedState(owner).careReminders.find(row => row.member_id === memberId);
+    now = new Date('2026-11-17T04:00:00Z');
+    engine.refreshCareReminders();
+    assert.equal(reminder(), undefined, '更正后的第 6 天未到期');
+    now = new Date('2026-11-18T04:00:00Z');
+    engine.refreshCareReminders();
+    assert.equal(reminder().due_on, '2026-11-18');
+    assert.throws(() => assign(task), /14 天内已联系/);
+    const care = { ...task, objective: 'care', service_order_id: orderId,
+        product_id: snapshot.products.find(product => product.is_active && product.product_type === 'care_service').product_id };
+    const id = assign(care);
+    const withdraw = { action: 'withdraw', id, previous: employee.employee };
+    assert.throws(() => engine.applyAction(employee, withdraw), /权限/);
+    assert.throws(() => engine.applyAction(owner, { ...withdraw, previous: '另一个员工' }), /负责人已变更/);
+    engine.applyAction(owner, withdraw);
+    engine.applyAction(owner, withdraw);
+    assert.equal(reminder().status, 'pending');
+    assert.equal(reminder().task_id, null);
+    assert.ok(engine.scopedState(owner).tasks.find(item => item.task_id === id).withdrawn_at);
+    assert.throws(() => contact(id), /没有找到/);
+    const retry = assign(care);
+    contact(retry);
+    assert.throws(() => engine.applyAction(owner, { ...withdraw, id: retry }), /尚未登记反馈/);
+    assert.equal(reminder().status, 'processed');
+});
+
+test('已有顾客可编辑资料，档案更新保留订单及旧资料基线', () => {
+    const now = () => new Date('2026-11-12T04:00:00Z');
+    const engine = createTeamStore(snapshot, { now });
+    const previous = eligible[0];
+    const memberId = previous.member_id;
+    const edit = { action: 'registerMember', memberId, expectedRevision: 0, name: '隔离档案修改',
+        membershipLevel: '银卡会员', joinedOn: '2026-10-01', lastVisit: '2026-11-05', cycle: '18',
+        totalSpending: '369.50', balance: '80', styles: '法式、裸色', technician: '离职技师',
+        careTags: '日常保湿，甲面偏薄', careService: '基础甲周护理', careOptIn: true, marketingConsent: true, complaint: true };
+    const employee = { role: 'employee', employee: engine.roster[0] };
+    assert.throws(() => engine.applyAction(employee, edit), /权限/);
+    assert.throws(() => engine.applyAction(owner, { ...edit, balance: '-5' }), /非负金额/);
+    assert.throws(() => engine.applyAction(owner, { ...edit, lastVisit: '2026-11-13' }), /今天或更早/);
+    engine.applyAction(owner, edit);
+    assert.throws(() => engine.applyAction(owner, { ...edit, balance: '50' }), /顾客资料已更新/);
+    const restored = createTeamStore(snapshot, { now, initialState: engine.exportState() });
+    const updated = restored.workspaceSnapshot().members.find(member => member.member_id === memberId);
+    assert.equal(updated.display_name, edit.name);
+    assert.equal(updated.last_visit, edit.lastVisit);
+    assert.equal(updated.average_cycle_days, 18);
+    assert.equal(updated.total_spending, 369.50);
+    assert.equal(updated.stored_balance, 80);
+    assert.equal(updated.preferred_styles, '法式|裸色');
+    assert.equal(updated.preferred_technician, edit.technician);
+    assert.equal(updated.unresolved_complaint, true);
+    assert.equal(updated.data_type, previous.data_type);
+    const care = restored.workspaceSnapshot().member_care_profiles.find(profile => profile.member_id === memberId);
+    assert.equal(care.care_need_tags, '日常保湿|甲面偏薄');
+    assert.equal(care.care_followup_opt_in, true);
+    assert.deepEqual(restored.workspaceSnapshot().orders, snapshot.orders);
+    assert.notEqual(previous.display_name, edit.name);
+    assert.equal(previous.last_visit, snapshot.members.find(member => member.member_id === memberId).last_visit);
+});
+
+test('已建顾客补齐显示编号，新增顾客继续顺序编号', () => {
+    const fixture = { ...snapshot, orders: [] };
+    const now = () => new Date('2026-11-12T04:00:00Z');
+    const saved = createTeamStore(fixture, { now }).exportState();
+    const firstId = 'C-aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa';
+    const secondId = 'C-bbbbbbbb-bbbb-4bbb-bbbb-bbbbbbbbbbbb';
+    saved.manualMembers = [
+        { member_id: firstId, display_name: '旧档案', manual_entry: true, data_type: 'real' },
+        { member_id: secondId, member_number: 'M2805', display_name: '已有编号', manual_entry: true, data_type: 'real' },
+    ];
+    const engine = createTeamStore(fixture, { now, initialState: saved });
+    assert.equal(engine.refreshCareReminders(), true);
+    assert.equal(engine.refreshCareReminders(), false);
+    assert.deepEqual(engine.exportState().manualMembers.map(member => [member.member_id, member.member_number]),
+        [[firstId, 'M2806'], [secondId, 'M2805']]);
+    const restored = createTeamStore(fixture, { now, initialState: engine.exportState() });
+    const created = restored.applyAction(owner, { action: 'registerMember', requestId: 'cccccccc-cccc-4ccc-cccc-cccccccccccc',
+        name: '新档案', marketingConsent: false, careOptIn: false });
+    const codes = new Map(restored.workspaceSnapshot().members.map(member => [member.member_id, member.member_number || member.member_id]));
+    assert.equal(codes.get(firstId), 'M2806');
+    assert.equal(codes.get(created.memberId), 'M2807');
+    assert.equal(codes.get('M0001'), 'M0001');
+    assert.equal(new Set(codes.values()).size, codes.size);
+});
+
 test('北京时间待办、预约改期、到店结果与明细统计沿用同一任务', () => {
     let now = new Date('2026-11-10T16:15:00Z');
     const engine = createTeamStore(snapshot, { now: () => now });
@@ -387,6 +502,41 @@ test('SQL 护理回访补算、唯一性、原子分派及订单状态变更', {
         assert.equal(later.find(row => row.member_id === c.member_id).status, 'expired');
         assert.equal(later.find(row => row.member_id === a.member_id).status, 'booked');
         assert.equal((await rows()).length, 4);
+
+        const manualBody = { action: 'registerMember', requestId: 'dddddddd-dddd-4ddd-dddd-dddddddddddd',
+            name: '隔离测试手工顾客', marketingConsent: false, careOptIn: true };
+        assert.equal((await employeePost(manualBody)).status, 403);
+        const added = await Promise.all([post(manualBody), post(manualBody)]);
+        assert.ok(added.every(response => response.ok));
+        const [{ memberId }, repeated] = await Promise.all(added.map(response => response.json()));
+        assert.equal(repeated.memberId, memberId);
+        const recorded = await (await post({ action: 'registerService', memberId,
+            requestId: 'eeeeeeee-eeee-4eee-eeee-eeeeeeeeeeee', completedOn: '2026-12-10' })).json();
+        assert.equal(recorded.snapshot.members.find(member => member.member_id === memberId).visit_count, 1);
+        const service = recorded.state.careReminders.find(row => row.member_id === memberId);
+        assert.equal(service.data_type, 'real');
+        assert.equal(service.status, 'pending');
+        assert.equal((await (await employeePost({ action: 'bootstrap' })).json()).snapshot.members.some(member => member.member_id === memberId), false);
+
+        await new Promise(resolve => server.close(resolve));
+        server = null;
+        await start();
+        post = postTo(await authenticate(base, 'login'));
+        employeePost = postTo(await authenticate(base, 'login', credentials));
+        const restored = await (await post({ action: 'bootstrap' })).json();
+        assert.ok(restored.snapshot.orders.some(order => order.order_id === service.service_order_id));
+        const manualAssign = await (await post(assign({ member_id: memberId, order_id: service.service_order_id }))).json();
+        const [manualTaskId] = manualAssign.taskIds;
+        assert.ok((await (await employeePost({ action: 'bootstrap' })).json()).snapshot.members.some(member => member.member_id === memberId));
+        assert.equal((await post({ action: 'withdraw', id: manualTaskId, previous: employee })).status, 200);
+        assert.equal((await (await employeePost({ action: 'bootstrap' })).json()).snapshot.members.some(member => member.member_id === memberId), false);
+        assert.equal((await read()).careReminders.find(row => row.member_id === memberId).status, 'pending');
+        const edit = { ...manualBody, memberId: a.member_id, expectedRevision: 0, name: '隔离库已有顾客',
+            technician: '原技师', catalogRevision: restored.state.catalogRevision };
+        const editResult = await post(edit);
+        assert.equal(editResult.status, 200);
+        assert.equal((await editResult.json()).snapshot.members.find(member => member.member_id === a.member_id).preferred_technician, '原技师');
+        assert.equal((await (await post({ action: 'bootstrap' })).json()).snapshot.members.find(member => member.member_id === a.member_id).display_name, edit.name);
     } finally {
         if (server) await new Promise(resolve => server.close(resolve));
         if (pool) await pool.close();

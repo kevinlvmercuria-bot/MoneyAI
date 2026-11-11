@@ -64,9 +64,11 @@ function registerTeamRoutes(app, pool, auth, { now, snapshot = defaultSnapshot }
                     // SQL transaction lock serializes this with assignment.
                     if (engine.refreshCareReminders()) await persistTeamState(tx, engine, reminders);
                     const state = engine.scopedState(account);
-                    if (action === 'state' && payload.revision === state.revision && payload.calendarDate === state.calendarDate)
+                    if (action === 'state' && payload.revision === state.revision && payload.calendarDate === state.calendarDate
+                        && (payload.catalogRevision ?? 0) === state.catalogRevision)
                         return null;
-                    return visibleResponse(tx, account, state, snapshot, action === 'bootstrap' || account.role === 'employee');
+                    return visibleResponse(tx, account, state, engine.workspaceSnapshot(),
+                        action === 'bootstrap' || account.role === 'employee' || payload.catalogRevision !== state.catalogRevision);
                 }
                 const result = engine.applyAction(account, { ...payload, action });
                 if (action === 'assign' || action === 'reassign') {
@@ -90,7 +92,12 @@ function registerTeamRoutes(app, pool, auth, { now, snapshot = defaultSnapshot }
                         throw Object.assign(new Error('该员工的登录账号已变更，请刷新后重试。'), { apiStatus: 409 });
                 }
                 await persistTeamState(tx, engine, reminders);
-                return { ...(await visibleResponse(tx, account, result.state, snapshot, account.role === 'employee')), taskIds: result.taskIds };
+                return {
+                    ...(await visibleResponse(tx, account, result.state, engine.workspaceSnapshot(),
+                        account.role === 'employee' || payload.catalogRevision !== result.state.catalogRevision)),
+                    taskIds: result.taskIds,
+                    ...(result.memberId && { memberId: result.memberId }),
+                };
             });
             if (!response) return res.status(204).end();
             res.set('Cache-Control', 'no-store').json(response);

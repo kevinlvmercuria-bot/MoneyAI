@@ -57,7 +57,7 @@
   function indexSnapshot(data) {
     DATA=data;
     baseMembers=data.members.map(m=>({...m,name:m.display_name,cycle:m.average_cycle_days,
-      spending:m.total_spending,balance:m.stored_balance,preference:m.preferred_styles.replaceAll('|',' / '),
+      spending:m.total_spending,balance:m.stored_balance,preference:m.preferred_styles.replaceAll('|',' / ')||'偏好待补',
       consent:m.marketing_consent,complaint:m.unresolved_complaint,appointment:m.has_upcoming_appointment}));
     memberNoteIndex=bucketMemberRows(data.member_notes);
     scheduledAppointments=teamLatestScheduledAppointments(data.appointments);
@@ -99,7 +99,7 @@
     if(initial)applyState(initial.state);
   } else {
     sharedAccounts=preview.listAccounts();
-    if(USER.role!=='guest')applyState(previewState(USER));
+    if(USER.role!=='guest')applyState(previewState(USER),preview.workspaceSnapshot());
   }
   const pageNames=['dashboard','members','campaigns','reports','products','studio','accounts'];
   const requestedPage=serverMode?new URLSearchParams(location.search).get('view'):null;
@@ -110,8 +110,11 @@
   const content = document.getElementById('content');
   const escape = value => String(value ?? '').replace(/[&<>"']/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
   const money = value => '¥' + Number(value).toLocaleString('zh-CN',{minimumFractionDigits:2,maximumFractionDigits:2});
+  const profileMoney = value => value==null?'未录入':money(value).replace('.00','');
   const member = id => state.members.find(m => m.member_id === id);
-  const blockers = m => [!m.consent && '未获得营销授权',m.complaint && '有未解决投诉',m.recent && '14 天内已联系',m.appointment && '已有未来预约',m.care_paused && '店主已选择暂不联系'].filter(Boolean);
+  const memberCode = m => m.member_number||m.member_id;
+  const memberCodeForId = id => member(id)?.member_number||id;
+  const taskStatus = task => task.withdrawn_at?'已撤回':STATUSES[task.status];
   function notify(message, error=false) {
     const node = document.getElementById('notice');
     node.textContent = message; node.hidden = false; node.className = error ? 'error' : '';
@@ -121,8 +124,9 @@
     if(USER.role==='guest')throw new Error('请先选择身份登录。');
     pendingWrites++;
     try {
-      const result=serverMode ? await requestState(action,payload) : preview.applyAction(USER,{action,...payload});
-      applyState(result.state,result.snapshot);
+      const result=serverMode ? await requestState(action,{...payload,catalogRevision:state.catalogRevision}) : preview.applyAction(USER,{action,...payload});
+      const snapshot=serverMode?result.snapshot:result.state.catalogRevision!==state.catalogRevision?preview.workspaceSnapshot():undefined;
+      applyState(result.state,snapshot);
       return result;
     } finally { pendingWrites--; }
   }
@@ -166,7 +170,10 @@
     taskButton.setAttribute('aria-label',taskNavigationLabel);
     taskButton.querySelector('.dock-tip').textContent=taskNavigationLabel;
     document.getElementById('owner-footer').hidden=Boolean(ui.employee);
-    document.getElementById('logs').innerHTML = state.logs.length ? state.logs.map(log => `<li>${escape(log)}</li>`).join('') : '<li>暂无操作记录。</li>';
+    document.getElementById('logs').innerHTML = state.logs.length ? state.logs.map(log => {
+      const text=log.replace(/^(已更新顾客档案 )(\S+)(?= · )/,(_,prefix,id)=>prefix+memberCodeForId(id));
+      return `<li>${escape(text)}</li>`;
+    }).join('') : '<li>暂无操作记录。</li>';
   }
   function table(headers, rows) {
     return `<div class="table-wrap"><table><thead><tr>${headers.map(h => `<th scope="col">${escape(h)}</th>`).join('')}</tr></thead><tbody>${rows.join('')}</tbody></table></div>`;
@@ -177,7 +184,7 @@
     const hasHistoricalDates = records.some(record=>record.follow_up);
     const headers = ['会员','处理结果','反馈 / 原因','负责人'];
     if(hasHistoricalDates)headers.push('历史计划日期');
-    return `<details ${records.length ? 'open' : ''}><summary>关怀记录 · ${records.length} 条</summary>${records.length ? table(headers, records.map(r => `<tr><td>${escape(r.member_id)}</td><td>${escape(r.outcome)}</td><td class="wrap">${escape(r.note)}</td><td>${escape(r.owner)}</td>${hasHistoricalDates?`<td>${escape(r.follow_up || '—')}</td>`:''}</tr>`)) : '<p class="helper">还没有关怀记录。</p>'}<p class="helper">重置演示数据会清空本地记录。</p></details>`;
+    return `<details ${records.length ? 'open' : ''}><summary>关怀记录 · ${records.length} 条</summary>${records.length ? table(headers, records.map(r => `<tr><td>${escape(memberCodeForId(r.member_id))}</td><td>${escape(r.outcome)}</td><td class="wrap">${escape(r.note)}</td><td>${escape(r.owner)}</td>${hasHistoricalDates?`<td>${escape(r.follow_up || '—')}</td>`:''}</tr>`)) : '<p class="helper">还没有关怀记录。</p>'}<p class="helper">重置演示数据会清空本地记录。</p></details>`;
   }
   // Membership uses the reviewed CSV snapshot; edits stay in this browser.
   const NOTE_LABELS={preference:'款式偏好',communication:'沟通习惯',service:'服务细节',care:'护理需求',appointment:'预约习惯'};
@@ -205,7 +212,7 @@
     if(!visit)return null;
     const days=daysBetween(state.calendarDate,visit.completed_on);
     return {date:visit.completed_on,days,phase:teamCarePhase(days),
-      name:memberProductIndex.get(visit.product_id)?.product_name||visit.style||'美甲服务'};
+      name:visit.manual_entry?'美甲服务':memberProductIndex.get(visit.product_id)?.product_name||visit.style||'美甲服务'};
   }
   function careReady(m) {
     return Array.isArray(state.careReminders) ? pendingCare.has(m.member_id)
@@ -224,13 +231,11 @@
   }
   function profileState(m){return `<span class="member-state ${escape(m.lifecycle)}">${LABELS[m.lifecycle]}</span>`}
   function profileCheck(ok,text){return `<li class="${ok?'':'blocked'}"><svg viewBox="0 0 20 20" aria-hidden="true">${ok?'<path d="m4 10 4 4 8-9"/>':'<path d="m5 5 10 10M15 5 5 15"/>'}</svg><span>${escape(text)}</span></li>`}
-  function memberBlockers(m,objective,assigned=false){
-    const rows=blockers(m);
-    if(m.data_completeness<.8)rows.push('档案完整度不足');
-    if(objective==='care'){
-      if(!memberCareIndex.get(m.member_id)?.care_followup_opt_in)rows.push('未同意护理跟进');
-      if(!assigned&&!careReady(m))rows.push('暂无到期且待分派的护理回访');
-    }
+  function memberBlockers(m,objective,task){
+    const serviceOrderId=task?.care_service_order_id||(!task&&pendingCare.get(m.member_id)?.service_order_id);
+    const rows=teamContactBlockers({...m,careOptIn:memberCareIndex.get(m.member_id)?.care_followup_opt_in,
+      optedOut:state.memberUpdates[m.member_id]?.consent===false},objective,serviceOrderId);
+    if(objective==='care'&&!task&&!careReady(m))rows.push('暂无到期且待分派的护理回访');
     if(objective==='preview'&&!matchingPreviews(m).length)rows.push('需要匹配偏好的活跃会员及 14 天内计划上架的款式');
     return rows;
   }
@@ -239,7 +244,7 @@
     const query=ui.query.trim().toLowerCase();
     return state.members.filter(m=>{
       const notes=profileNotes(m.member_id);
-      if(query&&!(m.member_id+m.name+m.preference+m.care_need_tags+notes.map(n=>n.note_text).join(' ')).toLowerCase().includes(query))return false;
+      if(query&&!(m.member_id+memberCode(m)+m.name+m.preference+m.care_need_tags+notes.map(n=>n.note_text).join(' ')).toLowerCase().includes(query))return false;
       if(ui.lifecycle!=='全部'&&LABELS[m.lifecycle]!==ui.lifecycle)return false;
       if(ui.tag==='可联系'&&memberBlockers(m).length||ui.tag==='有余额'&&m.balance<=0||ui.tag==='高价值'&&m.spending<2000)return false;
       return ui.memberFilter==='all'||ui.memberFilter==='dormant'&&m.lifecycle==='dormant'||ui.memberFilter==='due'&&m.lifecycle==='due'||ui.memberFilter==='notes'&&notes.length>0||ui.memberFilter==='care'&&Boolean(m.care_need_tags);
@@ -247,6 +252,7 @@
   }
   function membersPage(){
     content.innerHTML=`<div class="member-index"><aside class="member-directory" aria-label="会员查找与列表">
+      <button type="button" class="primary" data-register-member>新增顾客</button>
       <label class="member-search-label" for="member-query">查找会员</label><input id="member-query" type="search" value="${escape(ui.query)}" placeholder="搜索全名、编号、款式或备注" autocomplete="off">
       <div class="member-filter-row"><div><label for="member-lifecycle">生命周期</label><select id="member-lifecycle">${options(['全部',...Object.values(LABELS)],ui.lifecycle)}</select></div><div><label for="member-tag">附加筛选</label><select id="member-tag">${options(['全部','可联系','有余额','高价值'],ui.tag)}</select></div></div>
       <div class="member-tabs" aria-label="会员快捷筛选">${[['all','全部'],['dormant','沉睡'],['due','待复购'],['notes','有备注'],['care','有护理需求']].map(([value,label])=>`<button data-member-filter="${value}" aria-pressed="${ui.memberFilter===value}">${label}</button>`).join('')}</div><div id="member-results"></div>
@@ -259,7 +265,7 @@
     const pageRows=rows.slice((ui.memberPage-1)*MEMBER_PAGE_SIZE,ui.memberPage*MEMBER_PAGE_SIZE);
     if(!rows.some(m=>m.member_id===ui.member))selectProfile(pageRows[0]?.member_id||null);
     document.getElementById('member-results').innerHTML=`<p class="member-found" role="status">找到 ${rows.length.toLocaleString('zh-CN')} 位 · 共 ${state.members.length.toLocaleString('zh-CN')} 位会员</p>
-      ${pageRows.length?`<div class="member-directory-list">${pageRows.map(m=>`<button class="member-row" data-member-detail="${m.member_id}" aria-pressed="${m.member_id===ui.member}" aria-label="打开 ${escape(m.name)} ${m.member_id} 的档案"><span class="member-avatar" aria-hidden="true">${escape(m.name[0])}</span><span class="member-row-info"><span class="member-row-title"><strong>${escape(m.name)}</strong>${profileState(m)}</span><small>${m.member_id} · ${escape(m.preference)}<br>${profileNotes(m.member_id).length} 条备注</small></span><span class="member-row-days">${m.days===null?'—<small>日期待确认</small>':m.days+' 天<small>未到店</small>'}</span></button>`).join('')}</div>
+      ${pageRows.length?`<div class="member-directory-list">${pageRows.map(m=>`<button class="member-row" data-member-detail="${m.member_id}" aria-pressed="${m.member_id===ui.member}" aria-label="打开 ${escape(m.name)} ${memberCode(m)} 的档案"><span class="member-avatar" aria-hidden="true">${escape(m.name[0])}</span><span class="member-row-info"><span class="member-row-title"><strong>${escape(m.name)}</strong>${profileState(m)}</span><small>${memberCode(m)} · ${escape(m.preference)}<br>${profileNotes(m.member_id).length} 条备注</small></span><span class="member-row-days">${m.days===null?'—<small>日期待确认</small>':m.days+' 天<small>未到店</small>'}</span></button>`).join('')}</div>
       <div class="member-pagination"><button data-member-page="${ui.memberPage-1}" ${ui.memberPage<=1?'disabled':''}>上一页</button><span>${ui.memberPage} / ${pages}</span><button data-member-page="${ui.memberPage+1}" ${ui.memberPage>=pages?'disabled':''}>下一页</button></div>`:'<div class="empty">没有找到符合条件的会员。<p><button data-member-clear>清空筛选</button></p></div>'}`;
     document.querySelectorAll('[data-member-filter]').forEach(button=>button.setAttribute('aria-pressed',String(button.dataset.memberFilter===ui.memberFilter)));
     const detail=document.getElementById('member-detail');
@@ -268,25 +274,27 @@
     setupGlassControls(detail);
   }
   function completeProfile(m){
-    const care=memberCareIndex.get(m.member_id),notes=profileNotes(m.member_id),restrictions=memberBlockers(m);
+    const care=memberCareIndex.get(m.member_id)||{},notes=profileNotes(m.member_id),restrictions=memberBlockers(m);
     const assigned=activeTask(m.member_id);
     const careSource=CARE_SOURCE_LABELS[care.care_need_source]||'待确认';
-    const confidence={high:'高置信度',medium:'中等置信度',low:'历史记录较少'}[m.cycle_confidence]||'参考周期';
+    const careStart=teamCareFollowupDate(recentNailVisits.get(m.member_id)?.completed_on);
+    const confidence={high:'高置信度',medium:'中等置信度',low:'历史记录较少',manual:'已设定周期'}[m.cycle_confidence]||'参考周期';
     const latestVisit=m.days===null?'日期待确认':m.days===0?'今天':`${m.days} 天前`;
-    return `<article class="member-sheet"><header class="profile-topline"><div class="profile-identity"><span class="member-avatar" aria-hidden="true">${escape(m.name[0])}</span><div><div class="profile-name"><h2>${escape(m.name)}</h2>${profileState(m)}</div><p class="profile-subtitle">${m.member_id} · ${escape(m.membership_level)} · 档案完整度 ${Math.round(m.data_completeness*100)}%</p></div></div><button class="member-text-button" data-member-history="${m.member_id}">查看消费记录</button></header>
-      <div class="profile-metrics"><div><span>最近到店</span><strong>${latestVisit}</strong></div><div><span>累计消费</span><strong>${money(m.spending).replace('.00','')}</strong></div><div><span>储值余额</span><strong>${money(m.balance).replace('.00','')}</strong></div><div><span>历史消费</span><strong>${m.visit_count} 次</strong></div></div>
+    return `<article class="member-sheet"><header class="profile-topline"><div class="profile-identity"><span class="member-avatar" aria-hidden="true">${escape(m.name[0])}</span><div><div class="profile-name"><h2>${escape(m.name)}</h2>${profileState(m)}</div><p class="profile-subtitle">${memberCode(m)} · ${escape(m.membership_level)}${m.data_type==='simulation'?' · 模拟':''}</p></div></div><div class="button-row"><button type="button" class="member-text-button" data-edit-member="${m.member_id}">编辑档案</button><button type="button" class="primary" data-register-service="${m.member_id}">登记美甲完成</button></div></header>
+      <div class="profile-metrics"><div><span>最近到店</span><strong>${latestVisit}</strong></div><div><span>累计消费</span><strong>${profileMoney(m.spending)}</strong></div><div><span>储值余额</span><strong>${profileMoney(m.balance)}</strong></div><div><span>到店次数</span><strong>${m.visit_count} 次</strong></div></div>
+      ${manualServiceRecords(m)}
       <section class="profile-section"><div class="profile-section-head"><h3>个人复购周期</h3><span class="member-state active">${confidence}</span></div>${profileCycle(m)}</section>
-      <section class="profile-section profile-duo"><div><h3>偏好与权益</h3><dl class="profile-preferences"><dt>偏好款式</dt><dd>${escape(m.preference)}</dd><dt>偏好技师</dt><dd>${escape(m.preferred_technician||'暂无记录')}</dd><dt>储值权益</dt><dd>余额 ${money(m.balance).replace('.00','')}，不作为新增营收计算</dd><dt>加入会员</dt><dd>${escape(m.created_date)}</dd></dl></div><div><h3>营销资格检查</h3><ul class="profile-checks">${profileCheck(m.consent,m.consent?'已获得营销授权':'未获得营销授权')}${profileCheck(!m.recent,m.recent?'14 天内已有联系':'14 天内无触达')}${profileCheck(!m.complaint,m.complaint?'有未解决投诉':'无未解决投诉')}${profileCheck(!m.appointment,m.appointment?'已有未来预约':'无未来预约')}${m.care_paused?profileCheck(false,'店主已选择暂不联系'):''}</ul></div></section>
+      <section class="profile-section profile-duo"><div><h3>偏好与权益</h3><dl class="profile-preferences"><dt>偏好款式</dt><dd>${escape(m.preference)}</dd><dt>偏好技师</dt><dd>${escape(m.preferred_technician||'暂无记录')}</dd><dt>储值权益</dt><dd>${profileMoney(m.balance)}</dd><dt>加入会员</dt><dd>${escape(m.created_date||'日期待确认')}</dd></dl></div><div><h3>营销资格检查</h3><ul class="profile-checks">${profileCheck(m.consent,m.consent?'已获得营销授权':'未获得营销授权')}${profileCheck(!m.recent,m.recent?'14 天内已有联系':'14 天内无触达')}${profileCheck(!m.complaint,m.complaint?'有未解决投诉':'无未解决投诉')}${profileCheck(!m.appointment,m.appointment?'已有未来预约':'无未来预约')}${m.care_paused?profileCheck(false,'店主已选择暂不联系'):''}</ul></div></section>
       <section class="profile-section"><div class="profile-section-head"><h3>客户备注</h3><small>${notes.length} 条 · 门店内可见</small></div>${notes.length?notes.map(note=>profileNoteItem(note,'owner')).join(''):'<p class="profile-empty">还没有备注，可以记下她喜欢的款式和沟通习惯。</p>'}${noteEditor(m.member_id)}</section>
-      <section class="profile-section"><div class="profile-section-head"><h3>护理需求</h3><button class="member-text-button" data-member-compose="care">准备护理沟通</button></div>${m.care_need_tags?`<div class="profile-care-tags">${m.care_need_tags.split('|').map(tag=>`<span>${escape(tag)}</span>`).join('')}</div><p>建议服务：${escape(m.preferred_care_service||'到店后确认')}<br>需求来源：${escape(careSource)} · 回访开始日 ${escape(teamCareFollowupDate(recentNailVisits.get(m.member_id)?.completed_on)||'待确认')}</p>`:'<p class="profile-empty">暂无明确护理需求，先询问本人意愿，再推荐合适服务。</p>'}<p class="muted">${escape(care.care_guidance)} ${care.care_followup_opt_in?'已同意护理跟进。':'尚未同意护理跟进，当前只能预览沟通草稿。'}</p></section>
+      <section class="profile-section"><div class="profile-section-head"><h3>护理需求</h3><button class="member-text-button" data-member-compose="care">准备护理沟通</button></div>${m.care_need_tags?`<div class="profile-care-tags">${m.care_need_tags.split('|').map(tag=>`<span>${escape(tag)}</span>`).join('')}</div>`:''}${m.care_need_tags||m.preferred_care_service?`<p>建议服务：${escape(m.preferred_care_service||'到店后确认')} · 需求来源：${escape(careSource)}</p>`:'<p class="profile-empty">暂无明确护理需求，先询问本人意愿，再推荐合适服务。</p>'}${careStart?`<p class="muted">回访开始日 ${escape(careStart)}</p>`:''}<p class="muted">${escape(care.care_guidance)} ${care.care_followup_opt_in?'已同意护理跟进。':'尚未同意护理跟进，当前只能预览沟通草稿。'}</p></section>
       ${assigned?`<p class="profile-qualification">已有待联系任务 · 负责人 ${escape(assigned.assignee)} <button data-view-task="${assigned.task_id}">查看任务</button></p>`:''}
-      ${restrictions.length?`<p class="profile-qualification">当前联系限制：${escape(restrictions.join('、'))}。可准备草稿，暂不可创建触达任务。</p>`:''}<div class="profile-actions"><button data-member-history="${m.member_id}">完整消费记录</button><button class="primary" data-member-compose="repurchase">根据档案准备话术</button></div></article>`;
+      ${restrictions.length?`<p class="profile-qualification">营销联系限制 · ${escape(restrictions.join('、'))}</p>`:''}<div class="profile-actions"><button data-member-history="${m.member_id}">完整消费记录</button><button class="primary" data-member-compose="repurchase">根据档案准备话术</button></div></article>`;
   }
   function profileCycle(m){
     if(m.ratio===null)return '<p>补齐最近到店日期和个人平均周期后，可查看复购进度。</p>';
     const scale=Math.max(m.cycle*3.6,m.days+10);
     const averagePosition=Math.max(12,Math.min(82,m.cycle/scale*100));
-    return `<div class="cycle-labels"><span>最近到店 ${escape(m.last_visit)}</span><b>今天 · ${m.days} 天</b></div><div class="personal-cycle" style="--cycle:${averagePosition}%" role="img" aria-label="个人平均周期 ${m.cycle} 天，距最近到店 ${m.days} 天，为平均周期的 ${m.ratio} 倍"><div class="personal-cycle-fill" style="width:${Math.min(100,m.days/scale*100)}%"></div><span class="personal-cycle-marker" data-label="平均 ${m.cycle} 天"></span></div><p>当前为个人平均复购周期的 <b>${m.ratio} 倍</b>，状态为“${LABELS[m.lifecycle]}”。${m.visit_count<2?'历史到店间隔不足，先使用参考周期。':'个人平均周期根据历史到店间隔计算。'}</p>`;
+    return `<div class="cycle-labels"><span>最近到店 ${escape(m.last_visit)}</span><b>今天 · ${m.days} 天</b></div><div class="personal-cycle" style="--cycle:${averagePosition}%" role="img" aria-label="个人平均周期 ${m.cycle} 天，距最近到店 ${m.days} 天，为平均周期的 ${m.ratio} 倍"><div class="personal-cycle-fill" style="width:${Math.min(100,m.days/scale*100)}%"></div><span class="personal-cycle-marker" data-label="平均 ${m.cycle} 天"></span></div><p>当前为个人平均复购周期的 <b>${m.ratio} 倍</b>，状态为“${LABELS[m.lifecycle]}”。${m.profile_cycle_days?'当前周期由老板娘设定。':m.visit_count<2?'历史到店间隔不足，先使用参考周期。':'个人平均周期根据历史到店间隔计算。'}</p>`;
   }
   function profileNoteItem(note,controls){
     const employee=note.author_role==='employee';
@@ -308,12 +316,98 @@
     await apiAction('note',{memberId:id,noteId,text:String(values.get('text')||''),type:values.get('type'),pinned:values.has('pinned')});
     ui.editNote=null;delete ui.noteDrafts[id];render();notify('备注已保存。');
   }
+  function entryDialog(title, fields, submitLabel, save){
+    const dialog=document.createElement('dialog');
+    dialog.className='member-dialog member-form-dialog';
+    dialog.setAttribute('aria-labelledby','entry-dialog-title');
+    dialog.innerHTML=`<form><h2 id="entry-dialog-title">${escape(title)}</h2>${fields}
+      <p class="entry-error" role="alert" hidden></p><div class="button-row">
+      <button type="button" data-close-entry>取消</button><button type="submit" class="primary">${escape(submitLabel)}</button></div></form>`;
+    const form=dialog.querySelector('form'),cancel=dialog.querySelector('[data-close-entry]'),submit=form.querySelector('[type=submit]');
+    cancel.addEventListener('click',()=>dialog.close());
+    dialog.addEventListener('cancel',event=>{if(submit.disabled)event.preventDefault()});
+    dialog.addEventListener('close',()=>dialog.remove());
+    form.addEventListener('submit',async event=>{
+      event.preventDefault();
+      if(submit.disabled)return;
+      const error=form.querySelector('.entry-error');
+      error.hidden=true;
+      cancel.disabled=submit.disabled=true;
+      try {
+        const onSaved=await save(new FormData(form));
+        dialog.close();
+        onSaved();
+      } catch(failure){
+        error.textContent=failure.message||'保存失败，请重试。';
+        error.hidden=false;
+      } finally {cancel.disabled=submit.disabled=false}
+    });
+    document.body.append(dialog);
+    dialog.showModal();
+  }
+  function openMemberEntry(m){
+    const requestId=m?undefined:crypto.randomUUID();
+    const care=m&&memberCareIndex.get(m.member_id);
+    const input=(name,label,value,attributes='')=>`<div class="field"><label for="entry-member-${name}">${label}</label><input id="entry-member-${name}" name="${name}" value="${escape(value)}" ${attributes}></div>`;
+    const dateInput=`type="date" max="${escape(state.calendarDate)}"`;
+    entryDialog(m?'编辑顾客档案':'新增顾客',`
+      ${!serverMode?'<p>演示资料仅保存在当前浏览器，请使用模拟姓名。</p>':''}
+      <div class="form-row">${input('name','顾客姓名或称呼',m?.name,'required maxlength="40" autofocus')}
+      ${input('membershipLevel','会员等级',m?.membership_level||'普通会员','required maxlength="30"')}</div>
+      <div class="form-row">${input('joinedOn','入会日期',m?m.created_date:state.calendarDate,dateInput)}
+      ${input('lastVisit','补录最近到店日期',m?.profile_last_visit,dateInput)}</div>
+      <p class="profile-form-help">${m?.last_visit?'当前最近到店 '+escape(m.last_visit)+'。':''}到店日期用于复购，美甲回访按服务完成记录计算。</p>
+      <div class="form-row">${input('totalSpending','累计消费（元）',m?.spending,'type="number" min="0" max="99999999.99" step="0.01"')}
+      ${input('balance','储值余额（元）',m?.balance,'type="number" min="0" max="99999999.99" step="0.01"')}</div>
+      <div class="form-row">${input('cycle','个人复购周期（天）',m?.profile_cycle_days,'type="number" min="1" max="3650" step="1" placeholder="留空按记录计算"')}
+      ${input('technician','偏好技师',m?.preferred_technician,'maxlength="40"')}</div>
+      ${input('styles','偏好款式',m?.preferred_styles?.replaceAll('|','、'),'maxlength="120" placeholder="例如：法式、裸色"')}
+      <div class="form-row">${input('careTags','护理需求',m?.care_need_tags?.replaceAll('|','、'),'maxlength="120" placeholder="例如：日常保湿、到期卸甲"')}
+      ${input('careService','偏好护理项目',m?.preferred_care_service,'maxlength="60"')}</div>
+      <label class="check-label"><input type="checkbox" name="complaint" ${m?.complaint?'checked':''}>有未解决投诉</label>
+      <label class="check-label"><input type="checkbox" name="care" ${care?.care_followup_opt_in?'checked':''}>顾客已同意护理回访</label>
+      <label class="check-label"><input type="checkbox" name="marketing" ${m?.marketing_consent?'checked':''}>顾客已同意接收营销消息</label>`,
+    '保存档案',async data=>{
+      const {care,marketing,complaint,...fields}=Object.fromEntries(data);
+      const {memberId}=await apiAction('registerMember',{...fields,requestId,memberId:m?.member_id,
+        expectedRevision:m?.profile_revision??m?.revision??0,careOptIn:Boolean(care),marketingConsent:Boolean(marketing),complaint:Boolean(complaint)});
+      return ()=>{
+        if(!m||ui.query||ui.memberFilter!=='all'||ui.lifecycle!=='全部'||ui.tag!=='全部')
+          Object.assign(ui,{query:'',lifecycle:'全部',tag:'全部',memberFilter:'all',memberPage:m?Math.floor(state.members.findIndex(row=>row.member_id===memberId)/MEMBER_PAGE_SIZE)+1:1});
+        selectProfile(memberId);render();
+        document.getElementById('member-detail')?.focus();
+        notify(m?'顾客档案已更新。':'已新增顾客，可以在档案里登记美甲完成。');
+      };
+    });
+  }
+  function manualServiceRecords(m){
+    const orders=(servicesByMember.get(m.member_id)||[]).filter(order=>order.manual_entry)
+      .sort((a,b)=>b.completed_on.localeCompare(a.completed_on));
+    if(!m.manual_entry&&!orders.length)return '';
+    return `<section class="profile-section"><div class="profile-section-head"><h3>美甲完成记录</h3></div>
+      ${orders.length?orders.map(order=>`<div class="profile-section-head"><span>${escape(order.completed_on)} · 美甲完成</span>
+        <button type="button" class="member-text-button" data-edit-service="${escape(order.order_id)}">更正日期</button></div>`).join('')
+        :'<p class="profile-empty">顾客做完美甲后，登记一次实际完成日期。</p>'}</section>`;
+  }
+  function openServiceEntry(m,order){
+    if(!m)throw new Error('请先选择顾客。');
+    const requestId=order?undefined:crypto.randomUUID();
+    entryDialog(order?'更正完成日期':'登记美甲完成',`
+      <p>${escape(m.name)}${m.data_type==='simulation'?' · 模拟顾客':''}</p>
+      <div class="field"><label for="entry-completed-on">美甲完成日期</label><input id="entry-completed-on" type="date" name="completedOn" required
+        max="${escape(state.calendarDate)}" value="${escape(order?.completed_on||state.calendarDate)}" autofocus></div>`,
+    order?'保存更正':'保存服务',async data=>{
+      await apiAction('registerService',{memberId:m.member_id,requestId,orderId:order?.order_id,expectedCompletedOn:order?.completed_on,
+        completedOn:data.get('completedOn')});
+      return ()=>{render();notify(order?'服务完成日期已更正。':'已登记美甲完成。')};
+    });
+  }
   function showMemberOrders(id){
     const m=member(id),orders=[...(memberOrderIndex.get(id)||[])].sort((a,b)=>b.order_date.localeCompare(a.order_date));
     document.getElementById('member-orders-dialog')?.remove();
     const dialog=document.createElement('dialog');dialog.id='member-orders-dialog';dialog.className='member-dialog';dialog.setAttribute('aria-labelledby','member-orders-title');
     const types={care:'护理消费',nail_service:'美甲服务',care_service:'护理服务',care_product:'护理产品',service:'到店服务',recharge:'储值充值'};
-    dialog.innerHTML=`<header><h2 id="member-orders-title">${escape(m.name)} · 消费记录</h2><form method="dialog"><button>关闭</button></form></header><p>${id} · 共 ${orders.length} 条来自模拟数据库的记录 · 累计 ${money(m.spending)}</p>${orders.length?table(['日期','产品 / 服务','类型','金额','技师'],orders.map(order=>`<tr><td>${escape(order.order_date)}</td><td class="wrap">${escape(memberProductIndex.get(order.product_id)?.product_name||order.product_id)}</td><td>${escape(types[order.order_type]||order.order_type)}</td><td>${money(order.amount)}</td><td>${escape(order.technician)}</td></tr>`)):'<div class="empty">这位会员暂时没有消费记录。</div>'}<p>数据为已确认的模拟快照；储值余额展示可用权益。</p>`;
+    dialog.innerHTML=`<header><h2 id="member-orders-title">${escape(m.name)} · 服务与消费记录</h2><form method="dialog"><button>关闭</button></form></header><p>${memberCode(m)} · 共 ${orders.length} 条记录${m.data_type==='simulation'?' · 模拟':''}</p>${orders.length?table(['日期','产品 / 服务','类型','金额','技师'],orders.map(order=>`<tr><td>${escape(order.order_date)}</td><td class="wrap">${escape(order.manual_entry?'手工登记美甲':memberProductIndex.get(order.product_id)?.product_name||order.product_id)}</td><td>${escape(types[order.order_type]||order.order_type)}</td><td>${order.amount==null?'—':money(order.amount)}</td><td>${escape(order.technician||'—')}</td></tr>`)):'<div class="empty">这位会员暂时没有服务或消费记录。</div>'}`;
     document.body.append(dialog);dialog.addEventListener('click',event=>{if(event.target===dialog){const rect=dialog.getBoundingClientRect();if(event.clientX<rect.left||event.clientX>rect.right||event.clientY<rect.top||event.clientY>rect.bottom)dialog.close()}});dialog.addEventListener('close',()=>dialog.remove());dialog.showModal();
   }
   function profileProductChoices(m,objective){
@@ -336,6 +430,14 @@
       if(button.hasAttribute('data-member-clear')){ui.query='';ui.lifecycle='全部';ui.tag='全部';ui.memberFilter='all';ui.memberPage=1;render();return}
       if(button.dataset.memberPage){ui.memberPage=Number(button.dataset.memberPage);selectProfile(null);memberResults();return}
       if(button.dataset.memberFilter){ui.memberFilter=button.dataset.memberFilter;ui.memberPage=1;memberResults();return}
+      if(button.hasAttribute('data-register-member')){openMemberEntry();return}
+      if(button.dataset.editMember){openMemberEntry(member(button.dataset.editMember));return}
+      if(button.dataset.registerService){openServiceEntry(member(button.dataset.registerService));return}
+      if(button.dataset.editService){
+        const order=(servicesByMember.get(ui.member)||[]).find(item=>item.order_id===button.dataset.editService&&item.manual_entry);
+        if(!order)throw new Error('服务记录已更新，请刷新档案。');
+        openServiceEntry(member(ui.member),order);return;
+      }
       if(button.dataset.memberHistory){showMemberOrders(button.dataset.memberHistory);return}
       if(button.dataset.noteEdit){ui.editNote=button.dataset.noteEdit;delete ui.noteDrafts[ui.member];memberResults();document.getElementById('member-note-text').focus({preventScroll:true});return}
       if(button.hasAttribute('data-note-cancel')){ui.editNote=null;delete ui.noteDrafts[ui.member];memberResults();return}
@@ -407,14 +509,14 @@
   // Ported from the enhanced preview: member context, rules demo, image card and review.
   const WB_OBJECTIVES={repurchase:'复购邀请',balance:'储值关怀',new_product:'新品推荐',care:'护理关怀',preview:'新品预告',greeting:'日常问候'};
   const WB_TONES={
-    friendly:{style:'friendly',greeting:'，最近还好吗？',checkIn:'今天想到你，来打个招呼。祝你这周顺顺利利。',offer:'有兴趣的话，我可以发图给你看看。',care:'有什么需要维护的地方，随时和我说。'},
+    friendly:{style:'friendly',label:'自然风',greeting:'，最近还好吗？',checkIn:'今天想到你，来打个招呼。祝你这周顺顺利利。',offer:'有兴趣的话，我可以发图给你看看。',care:'有什么需要维护的地方，随时和我说。'},
     cute:{style:'cute',greeting:'你好呀～',checkIn:'今天想起来跟你打个招呼，最近过得怎么样呀？',offer:'想看看图的话，我发给你呀。',care:'有想调整的地方，随时跟我说呀。'},
     gentle:{style:'gentle',greeting:'，最近过得好吗？',checkIn:'想来问候一下你，有空的时候再聊就好。',offer:'如果你想看看，我可以发图，你有空慢慢挑。',care:'想调整或维护的话，等你方便时和我说就好。'},
-    brief:{style:'concise',greeting:'，你好。',checkIn:'最近过得怎么样？',offer:'想看图的话告诉我。',care:'需要维护的话，可以和我说。'},
+    brief:{style:'concise',label:'简洁风',greeting:'，你好。',checkIn:'最近过得怎么样？',offer:'想看图的话告诉我。',care:'需要维护的话，可以和我说。'},
     elegant:{style:'elegant',greeting:'，你好。',checkIn:'想问候一下你的近况，祝你这周顺利。',offer:'若你有兴趣，我可以发款式图供你参考。',care:'如需安排维护，可以告诉我方便的时间。'},
   };
   const WB_TONE_LABELS=Object.fromEntries(Object.entries(WB_TONES).map(([id,tone])=>[
-    id,globalThis.NailMateCommunication.resolveCommunication(null,tone.style).label,
+    id,tone.label||globalThis.NailMateCommunication.resolveCommunication(null,tone.style).label,
   ]));
   const workbenchDrafts={};
   ui.workbench={member_id:ui.employee?null:'M0001',objective:'repurchase',tone:'friendly',product_id:'',draft:'',loadedKey:null,revision:0};
@@ -449,7 +551,8 @@
       w.draft=workbenchDrafts[key]??(task?(ui.taskDrafts[task.task_id]?.message??task.message):'');
       w.loadedKey=key;
     }
-    const assigned=activeTask(m.member_id)?.objective===w.objective;
+    const active=activeTask(m.member_id);
+    const assigned=active?.objective===w.objective?active:undefined;
     return {m,products,p:offerProduct(w.product_id),reasons:memberBlockers(m,w.objective,assigned)};
   }
   function saveWorkbenchDraft(){
@@ -478,8 +581,8 @@
     const relationship=w.objective==='preview'||noProduct,assigned=activeTask(m.member_id);
     const contextFact=w.objective==='preview'?['预告款式',p?offerLabel(p):'暂无匹配款式']:['上次联系',m.last_contact_date||'暂无记录'];
     content.innerHTML=`<div class="wb-heading"><div><h2>把了解，变成一段自然的沟通。</h2><p>${ui.employee?'参考客户备注和产品信息，为自己负责的顾客准备话术。':'先看会员档案与客户备注，再准备参考话术，加入分派清单。'}</p></div><button data-page="products">打开产品与图片库</button></div>
-      <div class="wb-layout"><aside class="wb-context"><h3>这次，为谁准备？</h3><div class="wb-field"><label for="studio-member">选择会员</label><select id="studio-member">${state.members.map(person=>`<option value="${person.member_id}" ${person.member_id===m.member_id?'selected':''}>${person.member_id} · ${escape(person.name)} · ${LABELS[person.lifecycle]}</option>`).join('')}</select></div>
-      <div class="wb-member"><span class="member-avatar" aria-hidden="true">${escape(m.name[0])}</span><div><h3>${escape(m.name)}</h3><p>${m.member_id} · ${escape(m.membership_level)} · ${LABELS[m.lifecycle]}</p></div></div>
+      <div class="wb-layout"><aside class="wb-context"><h3>这次，为谁准备？</h3><div class="wb-field"><label for="studio-member">选择会员</label><select id="studio-member">${state.members.map(person=>`<option value="${person.member_id}" ${person.member_id===m.member_id?'selected':''}>${escape(memberCode(person))} · ${escape(person.name)} · ${LABELS[person.lifecycle]}</option>`).join('')}</select></div>
+      <div class="wb-member"><span class="member-avatar" aria-hidden="true">${escape(m.name[0])}</span><div><h3>${escape(m.name)}</h3><p>${memberCode(m)} · ${escape(m.membership_level)} · ${LABELS[m.lifecycle]}</p></div></div>
       <dl class="wb-facts">${careMode?(visit?`<div><dt>最近美甲</dt><dd><strong>${visit.days} 天前</strong><small>${escape(visit.date)}</small></dd></div><div><dt>美甲项目</dt><dd>${escape(visit.name)}</dd></div>`:'<div><dt>近期美甲</dt><dd>暂无美甲服务记录</dd></div>'):relationship?`<div><dt>${contextFact[0]}</dt><dd>${escape(contextFact[1])}</dd></div>`:`<div><dt>未到店</dt><dd><strong>${m.days===null?'日期待确认':m.days+' 天'}</strong>${m.days===null?'':`<small>最近到店 ${escape(m.last_visit)}</small>`}</dd></div><div><dt>个人周期</dt><dd>${m.ratio===null?'周期待确认':`<strong>${m.cycle} 天</strong> · 当前 ${m.ratio} 倍`}</dd></div>`}<div><dt>偏好风格</dt><dd>${escape(m.preference)}</dd></div><div><dt>护理需求</dt><dd>${escape((m.care_need_tags||'待本人确认').replaceAll('|',' / '))}</dd></div></dl>
       <section class="wb-note-section"><h3>客户备注</h3>${notes.length?`<ul class="wb-notes">${notes.map(note=>`<li><small>${note.is_pinned?'置顶 · ':''}${escape(NOTE_LABELS[note.note_type]||'备注')} · ${escape(note.author_name||'老板娘')}</small>${escape(note.note_text)}</li>`).join('')}</ul>`:'<p class="helper">暂时没有备注，可以先到会员档案补充。</p>'}${ui.employee?'':`<button data-open-profile="${m.member_id}">查看或补充会员备注</button>`}</section>
       <details class="wb-preparation" open><summary>沟通准备 · 先了解，再推荐</summary><h4>为什么值得关注</h4><p>${careMode||noProduct||m.ratio===null||w.objective==='preview'?escape(opportunityEvidence(m,w.objective,p)):`当前为个人复购周期的 <b>${m.ratio} 倍</b>，状态为“${LABELS[m.lifecycle]}”。历史偏好与客户备注是沟通参考。`}</p><h4>待本人确认</h4><p>${noProduct?'听听顾客近况，确认是否需要协助，以及什么时候方便再联系。':w.objective==='preview'?'确认是否想看这款的配色或效果。':careMode?'先确认现在的佩戴情况，再听听顾客想怎么处理。':'近期是否仍有美甲或护理需求、上次体验如何、希望怎样被联系；未到店原因需听本人表达。'}</p><h4>这次的小目标</h4><p>${noProduct||w.objective==='preview'?escape(opportunityAction(m,w.objective,p)):careMode?escape(opportunityAction(m,'care',p,workbenchCarePhase(m))):'了解一条顾客明确表达的需求，或确认她喜欢的款式和方便沟通的方式。'}</p></details>
@@ -506,7 +609,7 @@
     }
     if(w.objective==='balance'){
       const balance=`你在店里还有 ${money(m.balance).replace('.00','')} 的可用余额。`;
-      const product=brief?`想看看「${p.product_name}」吗？`:`「${p.product_name}」和你之前喜欢的${m.preferred_styles.replaceAll('|','、')}比较接近。`;
+      const product=brief||!m.preferred_styles?`想看看「${p.product_name}」吗？`:`「${p.product_name}」和你之前喜欢的${m.preferred_styles.replaceAll('|','、')}比较接近。`;
       return opening+balance+product+tone.offer;
     }
     if(w.objective==='care'){
@@ -522,7 +625,7 @@
     }
     if(brief)return opening+`可以看看「${p.product_name}」这款${p.style}美甲。`+tone.offer;
     let text=opening+(w.objective==='new_product'?'给你看看店里最近的款式。':m.lifecycle==='dormant'?'好久没见，想给你分享一个你可能会喜欢的款式。':'最近有想换个款式吗？');
-    text+=`「${p.product_name}」是${p.style}风格，${shape}和你之前喜欢的${m.preferred_styles.replaceAll('|','、')}比较接近。`;
+    text+=`「${p.product_name}」是${p.style}风格`+(m.preferred_styles?`，${shape}和你之前喜欢的${m.preferred_styles.replaceAll('|','、')}比较接近。`:'。');
     text+=tone.offer;
     return text+(w.revision%2===0?' 有想调整的颜色或细节，也可以直接告诉我。':'');
   }
@@ -633,8 +736,8 @@
     const groups=Object.fromEntries(OPPORTUNITY_PRIORITY.map(key=>[key,[]]));
     const queued=new Set(state.tasks.filter(t=>t.status==='assigned').map(t=>t.member_id));
     for(const m of state.members) {
-      if(m.last_handled_on===WORK_DATE||queued.has(m.member_id)||memberBlockers(m).length)continue;
-      for(const key of OPPORTUNITY_PRIORITY)if(matchesOpportunity(m,key))groups[key].push(m);
+      if(m.last_handled_on===WORK_DATE||queued.has(m.member_id))continue;
+      for(const key of OPPORTUNITY_PRIORITY)if(matchesOpportunity(m,key)&&!memberBlockers(m,key).length)groups[key].push(m);
     }
     return groups;
   }
@@ -695,7 +798,7 @@
     return '推荐 '+(p?.product_name||'先了解需求');
   }
   function taskContactBlockers(task) {
-    const m=member(task.member_id),rows=memberBlockers(m,task.objective,task.status==='assigned');
+    const m=member(task.member_id),rows=memberBlockers(m,task.objective,task.task_id?task:undefined);
     if(task.objective==='preview'&&!matchingPreviews(m).some(p=>p.product_id===task.product_id))rows.push('所选款式已超出预告窗口或偏好已变化');
     return rows;
   }
@@ -706,6 +809,7 @@
       const p=opportunityProduct(m,objective),flipped=Boolean(ui.flips[m.member_id]),note=profileNotes(m.member_id)[0];
       const visit=objective==='care'?careFollowupVisit(m):null;
       const action=opportunityAction(m,objective,p);
+      const cardAction=reminder?(visit?.phase==='removal'?'先确认是否已卸甲':'先了解佩戴和甲周状态'):action;
       const contextual=isNoProductObjective(objective)||objective==='preview';
       const timing=objective==='preview'?(p?offerLabel(p):'日期待确认'):(m.last_contact_date?`上次联系 ${m.last_contact_date}`:'有多次到店记录');
       const selected=ui.picks.has(m.member_id),reasons=reminder?careReminderBlockers(m):[];
@@ -716,10 +820,10 @@
       const days=reminder?daysBetween(state.calendarDate,reminder.completed_on):visit?visit.days:m.days;
       const cycle=reminder?`美甲完成 ${escape(reminder.completed_on)}`:visit?`${escape(visit.date)} · ${escape(visit.name)}`
         :`个人周期 ${m.cycle} 天 · 偏离 ${m.ratio} 倍${m.cycle_confidence==='low'?'<br>历史较少 · 参考周期':''}`;
-      const evidence=reminder?`美甲完成于 ${reminder.completed_on}，至今 ${days} 天。`:opportunityEvidence(m,objective,p);
+      const evidence=reminder?`美甲完成于 ${reminder.completed_on}，至今 ${days} 天。${m.last_contact_date?' 上次联系 '+m.last_contact_date+'。':''}`:opportunityEvidence(m,objective,p);
       return `<article class="hanger glass-track ${selected?'selected':''}" data-member="${m.member_id}"><div class="cord" aria-hidden="true"></div><div class="tilt glass-tilt"><div class="card ${flipped?'flipped':''}">
-        <div class="face front glass-surface" ${flipped?'inert aria-hidden="true"':'aria-hidden="false"'}><div class="meta">${m.member_id} / ${meta}</div><div class="monogram" aria-hidden="true">${escape(m.name[0])}</div><h3>${escape(m.name)}</h3>${contextual?`<div class="growth-card-context"><strong>${objective==='preview'?'偏好匹配':'保持联系'}</strong><span>${escape(timing)}</span></div>`:`<div class="days"><b>${days}</b><span>${reminder||visit?'天前做过美甲':'天未到店'}</span></div><p class="cycle">${cycle}</p>`}<p class="growth-card-goal">${goal}</p><p class="growth-card-product">${escape(blocked?'联系受限 · 翻牌查看':action)}</p><div class="actions"><button data-flip="${m.member_id}" aria-expanded="${flipped}" aria-label="查看 ${m.member_id} 推荐依据">查看依据 ↻</button>${pickButton}</div></div>
-        <div class="face back glass-surface" ${flipped?'aria-hidden="false"':'inert aria-hidden="true"'}><div class="meta">${m.member_id} / ${goal}</div><h3>${escape(m.name)}</h3><h4>${reminder?'回访依据':'为什么先联系她'}</h4><p>${escape(evidence)}</p><h4>${blocked?'联系限制':'本次行动'}</h4><p>${escape(blocked?reasons.join('、'):action)}</p>${reminder?'':`<p class="quiet">${note?'参考客户备注：'+escape(note.note_text.slice(0,78)+(note.note_text.length>78?'…':'')):'偏好 '+escape(m.preference)+' · 已通过联系资格检查'}</p>`}<div class="actions">${pickButton}<button data-unflip="${m.member_id}">返回 ↶</button></div></div>
+        <div class="face front glass-surface" ${flipped?'inert aria-hidden="true"':'aria-hidden="false"'}><div class="meta">${memberCode(m)} / ${meta}</div><div class="monogram" aria-hidden="true">${escape(m.name[0])}</div><h3>${escape(m.name)}</h3>${contextual?`<div class="growth-card-context"><strong>${objective==='preview'?'偏好匹配':'保持联系'}</strong><span>${escape(timing)}</span></div>`:`<div class="days"><b>${days}</b><span>${reminder||visit?'天前做过美甲':'天未到店'}</span></div><p class="cycle">${cycle}</p>`}<p class="growth-card-goal">${goal}</p><p class="growth-card-product">${escape(blocked?'联系受限 · 翻牌查看':cardAction)}</p><div class="actions"><button data-flip="${m.member_id}" aria-expanded="${flipped}" aria-label="查看 ${memberCode(m)} 推荐依据">查看依据 ↻</button>${pickButton}</div></div>
+        <div class="face back glass-surface" ${flipped?'aria-hidden="false"':'inert aria-hidden="true"'}><div class="meta">${memberCode(m)} / ${goal}</div><h3>${escape(m.name)}</h3><h4>${reminder?'回访依据':'为什么先联系她'}</h4><p>${escape(evidence)}</p><h4>${blocked?'联系限制':'本次行动'}</h4><p>${escape(blocked?reasons.join('、'):action)}</p>${reminder?'':`<p class="quiet">${note?'参考客户备注：'+escape(note.note_text.slice(0,78)+(note.note_text.length>78?'…':'')):'偏好 '+escape(m.preference)+' · 已通过联系资格检查'}</p>`}<div class="actions">${pickButton}<button data-unflip="${m.member_id}">返回 ↶</button></div></div>
       </div></div></article>`;
     }).join('')}</div>`;
   }
@@ -753,7 +857,7 @@
         <ul class="dispatch-list">${picks.map(pick=>{
           const m=member(pick.member_id),id=m.member_id,existing=activeTask(id);
           return `<li class="dispatch-row">
-            <div><strong>${escape(m.name)}</strong><small>${id} · ${pick.care_action?careActionLabel(pick.care_action):WB_OBJECTIVES[pick.objective]}</small>${existing?`<small>已有负责人 ${escape(existing.assignee)}</small>`:''}</div>
+            <div><strong>${escape(m.name)}</strong><small>${memberCode(m)} · ${pick.care_action?careActionLabel(pick.care_action):WB_OBJECTIVES[pick.objective]}</small>${existing?`<small>已有负责人 ${escape(existing.assignee)}</small>`:''}</div>
             <div class="field"><label for="assignee-${id}">负责人</label><select id="assignee-${id}" data-pick-employee="${id}">${employeeOptions(pick.assignee||suggestedEmployee(m),'选择员工',true)}</select></div>
             <div class="field dispatch-note"><label for="note-${id}">沟通重点 <small>选填</small></label><input id="note-${id}" data-pick-note="${id}" maxlength="180" value="${escape(pick.note)}" placeholder="比如先问她是否想换短甲"></div>
             <button type="button" data-remove-pick="${id}" aria-label="移除 ${escape(m.name)}">移除</button>
@@ -790,25 +894,27 @@
     return reasons;
   }
   function careQueue() {
-    const rows=[...pendingCare.values()].sort((a,b)=>a.due_on.localeCompare(b.due_on)||a.member_id.localeCompare(b.member_id));
-    if(!rows.length)return '<div class="empty atelier-empty"><p>暂无到期且待分派的护理回访。</p></div>';
-    const pageSize=12,pages=Math.ceil(rows.length/pageSize);
-    careQueuePage=Math.min(careQueuePage,pages);
-    const visible=rows.slice((careQueuePage-1)*pageSize,careQueuePage*pageSize)
+    const rows=[...pendingCare.values()].sort((a,b)=>Number(b.data_type==='real')-Number(a.data_type==='real')||a.due_on.localeCompare(b.due_on)||a.member_id.localeCompare(b.member_id));
+    const pages=Math.max(1,Math.ceil(rows.length/ui.limit));
+    careQueuePage=Math.max(1,Math.min(careQueuePage,pages));
+    const picks=rows.slice((careQueuePage-1)*ui.limit,careQueuePage*ui.limit)
       .map(reminder=>({m:member(reminder.member_id),objective:'care',reminder}));
-    return careCards(visible)+
-      (pages>1?`<div class="button-row" aria-label="回访待办分页"><button data-care-queue-page="${careQueuePage-1}" ${careQueuePage===1?'disabled':''}>上一页</button><span>${careQueuePage} / ${pages}</span><button data-care-queue-page="${careQueuePage+1}" ${careQueuePage===pages?'disabled':''}>下一页</button></div>`:'');
+    return {picks,pages};
   }
   function dashboard(){
     const careMode=ui.opportunity==='care';
     const queuedCare=careMode&&Array.isArray(state.careReminders);
-    const groups=opportunityGroups(),picks=careRecommendations(groups);
+    const groups=opportunityGroups(),queue=queuedCare?careQueue():null,picks=queue?.picks??careRecommendations(groups);
+    const pagination=queue?.pages>1?`<nav class="care-queue-pagination" aria-label="护理回访分页">
+      <button type="button" data-care-queue-page="${careQueuePage-1}" ${careQueuePage===1?'disabled':''}>上一页</button>
+      <span aria-label="第 ${careQueuePage} 页，共 ${queue.pages} 页">${careQueuePage} / ${queue.pages}</span>
+      <button type="button" data-care-queue-page="${careQueuePage+1}" ${careQueuePage===queue.pages?'disabled':''}>下一页</button></nav>`:'';
     const total=new Set(Object.values(groups).flat().map(m=>m.member_id)).size;
     const eligible=queuedCare?pendingCare.size:ui.opportunity==='all'?total:groups[ui.opportunity].length;
     content.innerHTML=`<section class="growth-intro"><div><h2>今天，联系哪些顾客？</h2><p>从 <strong>${state.members.length.toLocaleString('zh-CN')}</strong> 位会员中，${careMode?'最近一次美甲完成后，第 7–28 天建议护理，第 29–45 天建议卸甲。':'按个人复购周期、到店情况、顾客偏好和上架计划找出联系机会。'}先选人，再交给合适的员工。</p></div><div class="glass-track"><aside class="growth-daily-note glass-tilt glass-surface"><p><strong>${eligible.toLocaleString('zh-CN')}</strong> 位符合当前机会</p><small>${queuedCare?'有联系限制的待办会保留，并显示原因。':'已排除有联系限制、已有待联系任务和今天已处理的顾客'}</small><button class="primary" id="jump-dispatch">查看待分派清单 · <span id="pick-count">${ui.picks.size}</span> 位</button></aside></div></section>
       <section class="growth-opportunities"><div class="growth-section-title"><h2 class="atelier-heading">经营机会</h2><p>同一会员可能出现在多个机会中，分派清单每人只保留一条。</p></div><div class="opportunity-scroll"><div class="growth-opportunity-tabs" role="group" aria-label="选择经营机会" style="--opportunity-count:${Object.keys(OPPORTUNITIES).length};--opportunity-index:${Object.keys(OPPORTUNITIES).indexOf(ui.opportunity)}"><span class="opportunity-highlight" aria-hidden="true"></span>${Object.entries(OPPORTUNITIES).map(([key,item])=>`<button data-opportunity="${key}" aria-pressed="${ui.opportunity===key}"><span>${item.label}</span><b>${(key==='all'?total:key==='care'&&Array.isArray(state.careReminders)?pendingCare.size:groups[key].length).toLocaleString('zh-CN')}</b></button>`).join('')}</div></div></section>
-      ${queuedCare?`<section class="growth-priority"><div class="section-head"><h2 class="atelier-heading">护理回访待分派</h2></div>${careQueue()}</section>`:`<section class="growth-priority"><div class="section-head"><div><h2 class="atelier-heading">${ui.opportunity==='all'?'今日优先联系':OPPORTUNITIES[ui.opportunity].label+' · 优先名单'}</h2><p class="muted">${careMode?`按北京时间计算最近一次美甲服务完成后的天数。`:ui.opportunity==='repurchase'?'按距上次到店的天数与个人复购周期的比值，筛选待复购、低频和沉睡会员。':ui.opportunity==='all'?'从不同机会里挑选适合联系的人，再决定这次怎么聊。':'按会员档案、偏好和联系资格筛选，带着具体理由联系。'}</p></div><div class="count-control"><label for="care-limit">显示推荐</label><select id="care-limit">${options([3,4,5,8],ui.limit)}</select></div></div>
-      ${picks.length?careCards(picks):`<div class="empty atelier-empty">${ATELIER_NOTE}<p>${careMode?'暂无符合条件的待回访会员。':'这类机会暂时没有符合条件的会员，可以切换其他经营机会。'}</p><p><button data-page="campaigns">查看已有任务</button></p></div>`}<p class="care-note">${careMode?'同一天的顾客按会员编号排序。':'名单按已有规则优先级排列；评分不由模型计算。余额是服务权益，不作为新增收入或排序加分。'}</p></section>`}
+      <section class="growth-priority"><div class="section-head"><div><h2 class="atelier-heading">${ui.opportunity==='all'?'今日优先联系':OPPORTUNITIES[ui.opportunity].label+' · 优先名单'}</h2><p class="muted">${careMode?'按最近一次美甲的完成日期安排护理或卸甲。':ui.opportunity==='repurchase'?'按距上次到店的天数与个人复购周期的比值，筛选待复购、低频和沉睡会员。':ui.opportunity==='all'?'从不同机会里挑选适合联系的人，再决定这次怎么聊。':'按会员档案、偏好和联系资格筛选，带着具体理由联系。'}</p></div><div class="count-control"><label for="care-limit">显示推荐</label><select id="care-limit">${options([3,4,5,8],ui.limit)}</select></div></div>
+      ${picks.length?careCards(picks):`<div class="empty atelier-empty">${ATELIER_NOTE}<p>${careMode?'暂无符合条件的待回访会员。':'这类机会暂时没有符合条件的会员，可以切换其他经营机会。'}</p><p><button data-page="campaigns">查看已有任务</button></p></div>`}<div class="opportunity-footer"><p class="care-note">${careMode?'有联系限制的顾客可翻牌查看原因。':'名单按已有规则优先级排列；评分不由模型计算。余额是服务权益，不作为新增收入或排序加分。'}</p>${pagination}</div></section>
       <section class="dispatch-panel" id="dispatch-queue" tabindex="-1" aria-label="待分派清单">${dispatchPanel()}</section>`;
     setupGlass(content);
     setupCareRow();
@@ -896,6 +1002,14 @@
   function awaitingHandoff(task) {
     return !task.assignee && teamTaskNeedsHandoff(task);
   }
+  function openWithdrawTask(task){
+    if(!task||task.status!=='assigned'||task.result)throw new Error('仅尚未登记反馈的待联系任务可以撤回。');
+    entryDialog('撤回误派',`<p>请确认员工还没有联系「${escape(member(task.member_id).name)}」。撤回后，任务会移出员工待办，老板娘仍可查看记录。</p>`,
+      '确认撤回',async ()=>{
+        await apiAction('withdraw',{id:task.task_id,previous:task.assignee});
+        return ()=>{ui.task=task.task_id;ui.taskFilter='已撤回';render();notify('误派已撤回。')};
+      });
+  }
   function appointmentLabel(result) {
     return TEAM_APPOINTMENT_LABELS[result?.appointment_status] || '待到店';
   }
@@ -953,12 +1067,12 @@
     const filters=['全部',STATUSES.assigned,STATUSES.recorded];
     if(ui.employee)filters.unshift('今日待办');
     if(!ui.employee&&current.some(awaitingHandoff))filters.splice(1,0,'待交接');
-    if(!ui.employee)for(const status of ['archived','executed_simulated'])if(visible.some(t=>t.status===status))filters.push(STATUSES[status]);
+    if(!ui.employee)for(const status of ['已撤回',STATUSES.archived,STATUSES.executed_simulated])if(visible.some(t=>taskStatus(t)===status))filters.push(status);
     if(!filters.includes(ui.taskFilter))ui.taskFilter='全部';
     const todos=current.filter(task=>todoReasons(task).length);
     const todayOnly=ui.taskFilter==='今日待办';
     const tasks=todayOnly ? todos : visible.filter(task=>(!ui.employeeFilter||task.assignee===ui.employeeFilter)
-      &&(ui.taskFilter==='全部'||STATUSES[task.status]===ui.taskFilter||(ui.taskFilter==='待交接'&&awaitingHandoff(task))));
+      &&(ui.taskFilter==='全部'||taskStatus(task)===ui.taskFilter||(ui.taskFilter==='待交接'&&awaitingHandoff(task))));
     if(!tasks.some(t=>t.task_id===ui.task))ui.task=(tasks.find(t=>t.status==='assigned')||tasks[0])?.task_id||null;
     const task=tasks.find(t=>t.task_id===ui.task);
     const ownerFilter=ui.employee?'':`<div class="field"><label for="employee-filter">负责人</label><select id="employee-filter">${employeeOptions(ui.employeeFilter,'全部员工')}</select></div>`;
@@ -966,15 +1080,15 @@
     content.innerHTML=`<div class="section-head"><div><h2 class="atelier-heading">${title}</h2><p class="muted">${ui.employee?'查看客户备注、补充员工备注并登记反馈。':'按员工或状态查看任务，尚未联系的任务可以改派。'}</p></div><div class="button-row"><button type="button" data-refresh-team>刷新任务与备注</button>${ui.employee?'':'<button data-page="dashboard">去选客分派</button>'}</div></div>
       ${ui.employee?`<section class="task-agenda" aria-label="今日待办"><div><h3>今日待办 <strong>${todos.length}</strong></h3><p>${escape(state.calendarDate)} · 待联系、到期跟进和待登记到店结果</p></div><div class="button-row"><button type="button" data-task-view="今日待办" aria-pressed="${todayOnly}">查看待办</button><button type="button" data-task-view="全部" aria-pressed="${ui.taskFilter==='全部'}">全部任务</button></div></section>`:summaryCards(taskSummary(current))}
       <div class="review-layout"><section aria-label="联系任务列表">${ownerFilter}<div class="field"><label for="task-filter">任务状态</label><select id="task-filter">${options(filters,ui.taskFilter)}</select></div>
-        <p class="helper">${tasks.length} 项任务</p><div class="task-list">${tasks.map(t=>`<button data-task="${t.task_id}" aria-pressed="${ui.task===t.task_id}">${escape(member(t.member_id).name)} · ${escape(t.strategy)}<small>${awaitingHandoff(t)?'待交接':`${escape(t.assignee||'历史任务')} · ${escape(todoReasons(t).join(' · ')||STATUSES[t.status])}`}</small></button>`).join('')}</div>
+        <p class="helper">${tasks.length} 项任务</p><div class="task-list">${tasks.map(t=>`<button data-task="${t.task_id}" aria-pressed="${ui.task===t.task_id}">${escape(member(t.member_id).name)} · ${escape(t.strategy)}<small>${awaitingHandoff(t)?'待交接':`${escape(t.assignee||'历史任务')} · ${escape(todoReasons(t).join(' · ')||taskStatus(t))}`}</small></button>`).join('')}</div>
       </section><section class="task-detail" aria-label="联系任务详情">${task?`
-        <div class="detail-head"><h2>${escape(member(task.member_id).name)} · ${escape(task.strategy)}</h2><span class="pill">${awaitingHandoff(task)?'待交接':STATUSES[task.status]}</span></div>
+        <div class="detail-head"><h2>${escape(member(task.member_id).name)} · ${escape(task.strategy)}</h2><span class="pill">${awaitingHandoff(task)?'待交接':taskStatus(task)}</span></div>
         <p class="helper">${task.task_id} · 负责人 ${escape(task.assignee||'—')}${task.assigned_on?' · '+escape(task.assigned_on):''}</p>
         ${task.note?`<aside class="task-instruction" aria-label="老板娘本次交代"><h3>老板娘本次交代</h3><p>${escape(task.note)}</p></aside>`:''}
         ${taskPlan(task.result)}
         ${taskContext(task)}
         ${['assigned','recorded'].includes(task.status)&&ui.employee?employeeTaskForm(task):`<details><summary>查看沟通话术</summary><p class="task-note">${escape(task.message||'暂无话术')}</p></details>`}
-        ${!ui.employee&&(task.status==='assigned'||awaitingHandoff(task))?`<form id="reassign-form" class="form-panel" data-task="${task.task_id}"><div class="dispatch-toolbar"><div class="field"><label for="new-assignee">改派负责人</label><select id="new-assignee" name="assignee">${employeeOptions(task.assignee,'选择员工',true)}</select></div><button type="submit">确认改派</button></div></form>`:''}
+        ${!ui.employee&&(task.status==='assigned'||awaitingHandoff(task))?`<form id="reassign-form" class="form-panel" data-task="${task.task_id}"><div class="dispatch-toolbar"><div class="field"><label for="new-assignee">改派负责人</label><select id="new-assignee" name="assignee">${employeeOptions(task.assignee,'选择员工',true)}</select></div><div class="button-row"><button type="submit">确认改派</button>${task.status==='assigned'&&!task.result?`<button type="button" data-withdraw-task="${task.task_id}">撤回误派</button>`:''}</div></div></form>`:''}
         ${taskOutcome(task)}
         ${taskMemberNotes(task)}
         ${task.result_history?.length?`<details><summary>反馈修改记录 · ${task.result_history.length} 次</summary><ol class="task-result-history">${task.result_history.map(result=>`<li><strong>${escape(result.outcome)}</strong> <small>第 ${result.revision} 次保存 · ${escape(result.recorded_by||task.assignee)} · ${escape(result.updated_at?new Date(result.updated_at).toLocaleString('zh-CN',{timeZone:'Asia/Shanghai'}):result.recorded_on)}</small><p>${escape(result.note||'未填写顾客反馈')}</p>${taskPlan(result)}</li>`).join('')}</ol></details>`:''}
@@ -1028,6 +1142,7 @@
         details.scrollIntoView({block:'nearest'});
       }
       if(button.dataset.taskView){ui.taskFilter=button.dataset.taskView;render();}
+      if(button.dataset.withdrawTask){openWithdrawTask(visibleTasks().find(task=>task.task_id===button.dataset.withdrawTask));return}
       if(button.dataset.employeeNoteEdit||button.hasAttribute('data-employee-note-cancel')){
         const task=visibleTasks().find(item=>item.task_id===ui.task);
         if(!task)return;
@@ -1526,7 +1641,7 @@
       const shared=previewState(USER);
       if(revision!==identityRevision)return;
       resetIdentityDrafts(employee);
-      applyState(shared);
+      applyState(shared,preview.workspaceSnapshot());
       saveIdentity();
       showPage(homePage());
       document.getElementById('main').focus({preventScroll:true});
@@ -1589,7 +1704,7 @@
     if(!serverMode) { applyState(previewState(USER)); render(); return; }
     synchronizing=true;
     try {
-      const update=await requestState('state',force?{}:{revision:state.revision,calendarDate:state.calendarDate});
+      const update=await requestState('state',{catalogRevision:state.catalogRevision,...(!force&&{revision:state.revision,calendarDate:state.calendarDate})});
       if(!update||(!force&&(pendingWrites||editingPage()))||!applyState(update.state,update.snapshot))return;
       if(force) {
         for(const task of state.tasks) {
@@ -1658,7 +1773,7 @@
       form.querySelector('[data-appointment-fields]').hidden=target.value!=='已预约';
       form.querySelector('[data-follow-up-fields]').hidden=target.value==='不再营销';
     }
-    if(target.id==='care-limit') {ui.limit=Number(target.value);render();}
+    if(target.id==='care-limit') {ui.limit=Number(target.value);careQueuePage=1;render();}
     if(target.id==='member-lifecycle') {ui.lifecycle=target.value;ui.memberPage=1;memberResults();}
     if(target.id==='member-tag') {ui.tag=target.value;ui.memberPage=1;memberResults();}
     if(target.id==='task-filter') {ui.taskFilter=target.value;render();}

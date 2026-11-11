@@ -136,6 +136,14 @@ input,textarea{caret-color:var(--rose)}
 .member-dialog .table-wrap{max-height:55vh;overflow:auto}
 .member-dialog header button{font-size:12px;min-height:36px}
 .member-dialog p{font-size:12px;color:var(--muted)}
+.member-form-dialog{width:460px}
+.member-form-dialog:has(#entry-member-name){width:660px}
+.member-form-dialog h2{margin-bottom:18px}
+.member-form-dialog .profile-form-help{margin:0 0 15px;line-height:1.6}
+.member-form-dialog .check-label{margin-bottom:12px}
+.member-form-dialog .check-label input{flex:none;width:auto}
+.member-form-dialog .button-row{justify-content:flex-end;margin-top:22px}
+.member-form-dialog p.entry-error{color:var(--wine);font-size:14px}
 @media(min-width:1600px){.member-index{grid-template-columns:340px minmax(0,1fr);gap:32px}.member-sheet{padding:32px}}
 @media(max-width:1190px){.member-index{grid-template-columns:240px minmax(0,1fr);gap:18px}.member-sheet{padding:20px 18px}.profile-duo{gap:15px}.profile-metrics strong{font-size:18px}.profile-topline{align-items:flex-start;flex-wrap:wrap}.profile-row-title{gap:3px}}
 @media(max-width:980px) and (min-width:651px){.member-index{grid-template-columns:1fr}.member-directory{position:static}.member-directory-list{display:grid;grid-template-columns:1fr 1fr}.member-row{border-bottom:1px solid var(--line)}.member-row:nth-child(odd){border-right:1px solid var(--line)}}
@@ -380,6 +388,9 @@ th{font-size:13px}
 .growth-priority #care-wall button{min-height:42px;font-size:12px}.growth-priority #care-wall button.primary{background:#86455f;color:#fffaf7;border-color:#86455f}.growth-priority #care-wall button.primary:hover{background:#71394f}
 .growth-priority .actions{gap:7px;padding-top:16px}.growth-priority .back{background:#f3e9e7}
 .growth-priority .care-note{font-size:12px;line-height:1.9;margin-top:15px;max-width:82ch}
+.opportunity-footer{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:4px 16px}
+.care-queue-pagination{display:flex;align-items:center;gap:8px;font-size:12px;color:var(--muted)}
+.care-queue-pagination button{font-size:12px;min-height:34px;padding:5px 9px}
 .growth-bottom{display:grid;grid-template-columns:1fr;gap:36px;border-top:1px solid var(--line);margin-top:25px;padding-top:29px}
 .growth-bottom h3{font-size:19px;margin-bottom:12px}.growth-bottom p{font-size:14px;line-height:1.9;color:var(--muted);max-width:52ch;margin-bottom:18px}
 .growth-task-context{padding:22px 24px;background:#f3e9e7;border:1px solid var(--line);border-radius:12px;margin:22px 0}

@@ -38,7 +38,7 @@ function teamLatestCompletedNails(snapshot, date) {
         // Historical rows in the bundled simulation have an order date but no
         // status. Real records must come from a source with explicit completion.
         if (order.status !== 'completed' && !(simulation && order.status == null)) continue;
-        if (!simulation && !(snapshot.data_type !== 'simulation' && order.data_type === 'real')) continue;
+        if (!simulation && !(order.data_type === 'real' && (snapshot.data_type !== 'simulation' || order.manual_entry === true))) continue;
         const completed = order.completed_on ?? (simulation && order.order_date <= snapshot.as_of_date ? order.order_date : null);
         if (!teamValidDate(completed) || completed > date) continue;
         const previous = latest.get(order.member_id);
@@ -80,6 +80,84 @@ function teamMemberRecency(member, date) {
 
 function teamHasRecentContact(date, lastContact) {
     return Boolean(lastContact && teamDaysBetween(date, lastContact) < 14);
+}
+
+function teamContactBlockers(member, objective, serviceOrderId) {
+    const care = objective === 'care';
+    return [
+        (!care || !member.manual_entry) && !member.consent && '未获得营销授权',
+        care && !member.careOptIn && '未同意护理跟进',
+        care && member.optedOut && '顾客已选择不再营销',
+        member.complaint && '有未解决投诉',
+        member.recent && !(care && serviceOrderId) && '14 天内已联系',
+        member.appointment && '已有未来预约',
+        member.care_paused && '已标记暂不联系',
+        member.data_completeness < .8 && '档案完整度不足',
+    ].filter(Boolean);
+}
+
+function teamNextMemberNumber(snapshotMembers, manualMembers) {
+    let highest = 0;
+    for (const members of [snapshotMembers, manualMembers]) {
+        for (const member of members) {
+            const match = /^M(\d+)$/.exec(member.member_number || member.member_id);
+            if (match) highest = Math.max(highest, Number(match[1]));
+        }
+    }
+    return highest + 1;
+}
+
+function teamFormatMemberNumber(number) {
+    return 'M' + String(number).padStart(4, '0');
+}
+
+function teamWorkspaceSnapshot(snapshot, { manualMembers, manualServices, profileEdits }) {
+    if (!manualMembers.length && !manualServices.length && !Object.keys(profileEdits).length) return snapshot;
+    const dates = new Map();
+    for (const order of manualServices) {
+        if (!dates.has(order.member_id)) dates.set(order.member_id, new Set());
+        dates.get(order.member_id).add(order.completed_on);
+    }
+    const registered = manualMembers.slice().reverse().map(member => {
+        const visits = [...(dates.get(member.member_id) || [])].sort();
+        const last = visits.at(-1) || '';
+        return {
+            last_visit: last, visit_count: visits.length, total_spending: null, stored_balance: null,
+            average_cycle_days: visits.length > 1 ? Math.max(1, Math.round(teamDaysBetween(last, visits[0]) / (visits.length - 1))) : null,
+            cycle_confidence: 'low', membership_level: '普通会员', preferred_styles: '', preferred_technician: '',
+            last_contact_date: '', unresolved_complaint: false, priority_score: 0, data_completeness: 1,
+            care_need_tags: '', preferred_care_service: '', ...member,
+        };
+    });
+    const existing = snapshot.members.map(member => {
+        const visits = [...(dates.get(member.member_id) || [])].filter(date => date > (member.last_visit || '')).sort();
+        return visits.length ? { ...member, visit_count: member.visit_count + visits.length } : member;
+    });
+    const profiles = new Map(snapshot.member_care_profiles.map(row => [row.member_id, row]));
+    const members = [...registered, ...existing].map(member => {
+        const edit = profileEdits[member.member_id];
+        if (member.manual_entry || edit) {
+            const details = { ...member, ...edit };
+            const previous = profiles.get(member.member_id);
+            profiles.set(member.member_id, {
+                member_id: member.member_id, data_type: member.data_type, ...previous,
+                care_followup_opt_in: details.care_followup_opt_in ?? previous?.care_followup_opt_in ?? false,
+                care_need_tags: details.care_need_tags ?? previous?.care_need_tags,
+                preferred_care_service: details.preferred_care_service ?? previous?.preferred_care_service,
+                ...(edit && (edit.care_need_tags !== undefined || edit.preferred_care_service !== undefined) && { care_need_source: 'owner_note' }),
+            });
+        }
+        if (!member.manual_entry && !edit && !dates.has(member.member_id)) return member;
+        const details = { ...member, ...edit };
+        const visits = [...(dates.get(member.member_id) || []), details.profile_last_visit || member.last_visit || ''].sort();
+        return {
+            ...details, last_visit: visits.at(-1), average_cycle_days: details.profile_cycle_days ?? member.average_cycle_days,
+            cycle_confidence: details.profile_cycle_days ? 'manual' : member.cycle_confidence,
+        };
+    });
+    return {
+        ...snapshot, members, orders: [...snapshot.orders, ...manualServices], member_care_profiles: [...profiles.values()],
+    };
 }
 
 function teamLatestScheduledAppointments(appointments) {
@@ -126,14 +204,12 @@ function teamTodoReasons(task, date) {
 }
 
   function createTeamStore(snapshot, options = {}){
-    const members = new Map(snapshot.members.map(row => [row.member_id, row]));
     const roster = [...new Set(snapshot.members.map(row => row.preferred_technician).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'zh-CN'));
     const products = new Map(snapshot.products.map(row => [row.product_id, row]));
     products.set('IDEA-SEA-SALT', { product_type: 'nail_style', launch_date: '2026-11-14', style: '裸色' });
     const objectives = new Map(Object.entries({ repurchase: '复购邀请', balance: '储值关怀', new_product: '新品推荐', care: '护理关怀', preview: '新品预告', greeting: '日常问候' }));
     const outcomes = ['未回复', '有意向', '已预约', '已沟通', '暂不联系', '不再营销'];
     const noteTypes = ['preference', 'communication', 'service', 'care', 'appointment'];
-    const careProfiles = new Map(snapshot.member_care_profiles.map(row => [row.member_id, row]));
     const snapshotNotes = new Map(snapshot.member_notes.map(row => [row.note_id, row]));
     const scheduledAppointments = teamLatestScheduledAppointments(snapshot.appointments);
     // Single-file preview. All fixture data and actions stay in this browser.
@@ -142,6 +218,7 @@ function teamTodoReasons(task, date) {
     let store = {
       accounts: roster.map((employee, index) => ({ employee, username: 'staff' + String(index + 1).padStart(2, '0'), role: 'employee' })),
       tasks: [], notes: [], noteEdits: {}, images: {}, memberUpdates: {}, care_records: [], careReminders: [], logs: [], revision: 0,
+      manualMembers: [], manualServices: [], profileEdits: {}, catalogRevision: 0,
     };
     try {
       const saved = options.initialState || (options.storage ? JSON.parse(options.storage.getItem(storageKey) || 'null') : null);
@@ -150,14 +227,30 @@ function teamTodoReasons(task, date) {
     // Older deletions left a blank login name behind in the employee list.
     store.accounts = store.accounts.filter(account => account.username);
     if (options.careReminders) store.careReminders = options.careReminders;
+    let memberNumbersChanged = store.manualMembers.some(member => !member.member_number);
+    if (memberNumbersChanged) {
+      let nextNumber = teamNextMemberNumber(snapshot.members, store.manualMembers);
+      store.manualMembers = store.manualMembers.map(member => member.member_number
+        ? member : { ...member, member_number: teamFormatMemberNumber(nextNumber++) });
+      store.catalogRevision++;
+    }
+    let workspace, members, careProfiles;
+    function indexWorkspace(updated) {
+      workspace = updated;
+      members = new Map(workspace.members.map(row => [row.member_id, row]));
+      careProfiles = new Map(workspace.member_care_profiles.map(row => [row.member_id, row]));
+    }
+    indexWorkspace(teamWorkspaceSnapshot(snapshot, store));
     for (const id of new Set(store.tasks.filter(task => task.result).map(task => task.member_id)))
       rebuildMemberUpdates(store, id);
     const staff = () => store.accounts.map(account => account.employee);
-    function commit(next) {
+    function commit(next, updatedWorkspace) {
       next.revision = store.revision + 1;
       // Persist first: a full storage device must not look like a successful save.
       if (options.storage) options.storage.setItem(storageKey, JSON.stringify(next));
       store = next;
+      memberNumbersChanged = false;
+      if (updatedWorkspace) indexWorkspace(updatedWorkspace);
     }
 
     function requireCondition(condition, status, message) {
@@ -167,6 +260,49 @@ function teamTodoReasons(task, date) {
     function field(value, max, required = false) {
       requireCondition(typeof value === 'string' && value.length <= max && (!required || value.trim()), 400, '请检查填写内容和长度。');
       return value.trim();
+    }
+
+    function profileFields(body, date) {
+      const details = { display_name: field(body.name, 40, true) };
+      requireCondition(typeof body.marketingConsent === 'boolean' && typeof body.careOptIn === 'boolean', 400, '请确认顾客的联系授权。');
+      Object.assign(details, { marketing_consent: body.marketingConsent, care_followup_opt_in: body.careOptIn });
+      for (const [key, value, limit] of [
+        ['membership_level', body.membershipLevel, 30], ['preferred_styles', body.styles, 120],
+        ['preferred_technician', body.technician, 40], ['care_need_tags', body.careTags, 120],
+        ['preferred_care_service', body.careService, 60],
+      ]) {
+        if (value === undefined) continue;
+        const text = field(value, limit, key === 'membership_level');
+        details[key] = ['preferred_styles', 'care_need_tags'].includes(key)
+          ? [...new Set(text.split(/[|、，,]/).map(tag => tag.trim()).filter(Boolean))].join('|') : text;
+      }
+      for (const [key, value] of [['created_date', body.joinedOn], ['profile_last_visit', body.lastVisit]]) {
+        if (value === undefined) continue;
+        requireCondition(value === '' || (teamValidDate(value) && value >= '0001-01-01' && value <= date),
+          400, '入会和到店日期应为今天或更早。');
+        details[key] = value || null;
+      }
+      for (const [key, value] of [['total_spending', body.totalSpending], ['stored_balance', body.balance]]) {
+        if (value === undefined) continue;
+        requireCondition(value === '' || /^\d{1,8}(?:\.\d{1,2})?$/.test(String(value)), 400, '请填写非负金额，最多保留两位小数。');
+        details[key] = value === '' ? null : Number(value);
+      }
+      if (body.cycle !== undefined) {
+        requireCondition(body.cycle === '' || (/^\d+$/.test(String(body.cycle)) && Number(body.cycle) >= 1 && Number(body.cycle) <= 3650),
+          400, '请填写 1–3650 天的个人周期，留空则按记录计算。');
+        details.profile_cycle_days = body.cycle === '' ? null : Number(body.cycle);
+      }
+      if (body.complaint !== undefined) {
+        requireCondition(typeof body.complaint === 'boolean', 400, '请检查投诉状态。');
+        details.unresolved_complaint = body.complaint;
+      }
+      return details;
+    }
+
+    function manualId(prefix, requestId) {
+      requireCondition(typeof requestId === 'string' && /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i.test(requestId),
+        400, '请重新打开录入表单后再保存。');
+      return prefix + requestId.toLowerCase();
     }
 
     function scopedState(account, clock = clockNow()) {
@@ -182,7 +318,7 @@ function teamTodoReasons(task, date) {
       const noteEdits = owner ? store.noteEdits : Object.fromEntries(Object.entries(store.noteEdits).filter(([id]) =>
         allowed.has(snapshotNotes.get(id)?.member_id) || notes.some(note => note.note_id === id)));
       return {
-        tasks, notes, noteEdits, images: store.images, revision: store.revision, employeeNotesEnabled: true,
+        tasks, notes, noteEdits, images: store.images, revision: store.revision, catalogRevision: store.catalogRevision, employeeNotesEnabled: true,
         workDate: clock.date, calendarDate: clock.date,
         memberUpdates: owner ? store.memberUpdates : Object.fromEntries(Object.entries(store.memberUpdates).filter(([id]) => allowed.has(id))),
         logs: owner ? store.logs : [],
@@ -192,8 +328,9 @@ function teamTodoReasons(task, date) {
       };
     }
 
-    function reconcileCareReminders(next, clock) {
-      const latest = teamLatestCompletedNails(snapshot, clock.date);
+    function reconcileCareReminders(next, clock, catalog = workspace) {
+      const latest = teamLatestCompletedNails(catalog, clock.date);
+      const profiles = catalog === workspace ? careProfiles : new Map(catalog.member_care_profiles.map(row => [row.member_id, row]));
       const keys = new Set(next.careReminders.map(teamCareReminderKey));
       const tasks = new Map(next.tasks.map(task => [task.task_id, task]));
       let changed = false;
@@ -223,7 +360,7 @@ function teamTodoReasons(task, date) {
         changed = true;
       }
       for (const order of latest.values()) {
-        if (!careProfiles.get(order.member_id)?.care_followup_opt_in) continue;
+        if (!profiles.get(order.member_id)?.care_followup_opt_in) continue;
         const due = teamCareFollowupDate(order.completed_on);
         if (!teamCarePhase(teamDaysBetween(clock.date, order.completed_on))) continue;
         const identity = { member_id: order.member_id, service_order_id: order.order_id };
@@ -237,7 +374,8 @@ function teamTodoReasons(task, date) {
 
     function refreshCareReminders(clock = clockNow()) {
       const next = structuredClone(store);
-      if (!reconcileCareReminders(next, clock)) return false;
+      const remindersChanged = reconcileCareReminders(next, clock);
+      if (!remindersChanged && !memberNumbersChanged) return false;
       commit(next);
       return true;
     }
@@ -310,20 +448,21 @@ function teamTodoReasons(task, date) {
       };
     }
 
-    function checkContact(next, id, objective, productId, date) {
+    function checkContact(next, id, objective, productId, date, serviceOrderId) {
       const m = members.get(id);
       const update = next.memberUpdates[id] || {};
       const product = products.get(productId);
-      const recent = teamHasRecentContact(date, update.last_contact_date ?? m.last_contact_date);
-      const reasons = [
-        !(update.consent ?? m.marketing_consent) && '未获得营销授权',
-        m.unresolved_complaint && '有未解决投诉',
-        recent && '14 天内已联系',
-        (update.appointment || (scheduledAppointments.get(id) || '') >= date) && '已有未来预约',
-        update.care_paused && '已标记暂不联系',
-        m.data_completeness < .8 && '档案完整度不足',
-      ].filter(Boolean);
-      if (objective === 'care' && !careProfiles.get(id)?.care_followup_opt_in) reasons.push('未同意护理跟进');
+      const reasons = teamContactBlockers({
+        consent: update.consent ?? m.marketing_consent,
+        manual_entry: m.manual_entry,
+        careOptIn: careProfiles.get(id)?.care_followup_opt_in,
+        optedOut: update.consent === false,
+        complaint: m.unresolved_complaint,
+        recent: teamHasRecentContact(date, update.last_contact_date ?? m.last_contact_date),
+        appointment: update.appointment || (scheduledAppointments.get(id) || '') >= date,
+        care_paused: update.care_paused,
+        data_completeness: m.data_completeness,
+      }, objective, serviceOrderId);
       if (objective === 'preview') {
         const untilLaunch = teamDaysBetween(product?.launch_date, date);
         const { lifecycle } = teamMemberRecency({ ...m, ...update }, date);
@@ -341,7 +480,59 @@ function teamTodoReasons(task, date) {
       const { date, utc } = clock;
       reconcileCareReminders(next, clock);
       let taskIds = [];
+      let memberId, updatedWorkspace;
       switch (action) {
+        case 'registerMember': {
+          const details = profileFields(body, date);
+          memberId = body.memberId ?? manualId('C-', body.requestId);
+          const record = members.get(memberId);
+          const current = { ...record, care_followup_opt_in: Boolean(careProfiles.get(memberId)?.care_followup_opt_in) };
+          const changes = Object.entries(details).filter(([key, value]) => current[key] !== value);
+          if (record && !changes.length)
+            return { state: scopedState(account, clock), taskIds, memberId };
+          if (body.memberId != null) {
+            requireCondition(record, 404, '没有找到这位顾客。');
+            const revision = record.profile_revision ?? record.revision ?? 0;
+            requireCondition(revision === (body.expectedRevision ?? 0), 409, '顾客资料已更新，请关闭后重新打开。');
+            next.profileEdits[memberId] = { ...next.profileEdits[memberId], ...Object.fromEntries(changes), profile_revision: revision + 1 };
+            next.logs.push(`已更新顾客档案 ${record.member_number || memberId} · ${date}`);
+          } else {
+            requireCondition(!record, 409, '录入请求已使用，请重新打开表单。');
+            const memberNumber = teamFormatMemberNumber(teamNextMemberNumber(snapshot.members, next.manualMembers));
+            next.manualMembers.push({ member_id: memberId, member_number: memberNumber, created_date: date, ...details, manual_entry: true,
+              revision: 1, data_type: options.storage ? 'simulation' : 'real' });
+          }
+          updatedWorkspace = teamWorkspaceSnapshot(snapshot, next);
+          break;
+        }
+        case 'registerService': {
+          memberId = body.memberId;
+          const customer = members.get(memberId);
+          requireCondition(customer, 404, '没有找到这位顾客。');
+          requireCondition(teamValidDate(body.completedOn) && body.completedOn >= '0001-01-01' && body.completedOn <= date,
+            400, '请选择今天或更早的实际服务完成日期。');
+          const orderId = body.orderId ?? manualId('S-', body.requestId);
+          const order = next.manualServices.find(row => row.order_id === orderId);
+          if (order?.member_id === memberId && order.completed_on === body.completedOn)
+            return { state: scopedState(account, clock), taskIds, memberId };
+          if (body.orderId != null) {
+            requireCondition(order?.member_id === memberId, 404, '没有找到这条手工服务记录。');
+            requireCondition(order.completed_on === body.expectedCompletedOn, 409, '服务日期已更新，请关闭后重新打开。');
+          } else {
+            requireCondition(!workspace.orders.some(row => row.order_id === orderId), 409, '录入请求已使用，请重新打开表单。');
+          }
+          requireCondition(!next.manualServices.some(row => row.order_id !== orderId && row.member_id === memberId && row.completed_on === body.completedOn),
+            409, '这位顾客当天已登记美甲完成。可在档案中更正原记录。');
+          if (order) {
+            Object.assign(order, { completed_on: body.completedOn, order_date: body.completedOn, updated_at: utc });
+          } else {
+            next.manualServices.push({ order_id: orderId, member_id: memberId, order_type: 'nail_service', status: 'completed',
+              completed_on: body.completedOn, order_date: body.completedOn, data_type: customer.data_type, manual_entry: true,
+              style: '手工登记美甲', created_at: utc, updated_at: utc });
+          }
+          updatedWorkspace = teamWorkspaceSnapshot(snapshot, next);
+          break;
+        }
         case 'employeeAccount': {
           const known = staff();
           let employee = body.employee;
@@ -409,7 +600,7 @@ function teamTodoReasons(task, date) {
               requireCondition((input.care_action == null || input.care_action === carePhase) && teamCareProductMatches(product, carePhase),
                 409, '当前回访阶段与所选服务不符，请刷新并按最新建议重新选择。');
             }
-            const reasons = checkContact(next, input.member_id, input.objective, productId, date);
+            const reasons = checkContact(next, input.member_id, input.objective, productId, date, reminder?.service_order_id);
             if (next.memberUpdates[input.member_id]?.last_handled_on === date) reasons.push('今天已有沟通记录');
             requireCondition(!reasons.length, 409, `暂不可分派：${reasons.join('、')}。`);
             const id = 'T' + String(next.tasks.length + 1).padStart(4, '0');
@@ -438,6 +629,21 @@ function teamTodoReasons(task, date) {
           }
           break;
         }
+        case 'withdraw': {
+          const task = next.tasks.find(item => item.task_id === body.id);
+          if (task?.withdrawn_at) return { state: scopedState(account, clock), taskIds };
+          requireCondition(task?.status === 'assigned' && !task.result, 409, '仅尚未登记反馈的待联系任务可以撤回。');
+          requireCondition(task.assignee === body.previous, 409, '负责人已变更，请刷新后再撤回。');
+          Object.assign(task, { status: 'archived', withdrawn_at: utc, employee_access_revoked: true });
+          task.history.push(`${account.username || '老板娘'} 撤回误派 · ${date}`);
+          const reminder = task.care_service_order_id && next.careReminders.find(row => row.task_id === task.task_id && row.status === 'assigned');
+          if (reminder) {
+            Object.assign(reminder, { status: 'pending', task_id: null, updated_at: utc });
+            reconcileCareReminders(next, clock);
+          }
+          next.logs.push(`已撤回联系任务 ${task.task_id}。`);
+          break;
+        }
         case 'result': {
           const task = next.tasks.find(task => task.task_id === body.id && teamTaskBelongsTo(task, account.employee));
           requireCondition(task, 404, '没有找到你的这项任务。');
@@ -449,7 +655,7 @@ function teamTodoReasons(task, date) {
           // Editing a record is not a new outbound contact: its own cooldown,
           // appointment or pause must not prevent a later reply being recorded.
           if (!previous) {
-            const reasons = checkContact(next, task.member_id, task.objective, task.product_id, date);
+            const reasons = checkContact(next, task.member_id, task.objective, task.product_id, date, task.care_service_order_id);
             requireCondition(!reasons.length || body.outcome === '暂不联系', 409, '当前有联系限制，请选择「暂不联系」。');
           }
           const note = field(body.note, 500);
@@ -536,11 +742,16 @@ function teamTodoReasons(task, date) {
         default:
           requireCondition(false, 400, '未知操作。');
       }
-      commit(next);
-      return { state: scopedState(account, clock), taskIds };
+      if (updatedWorkspace) {
+        next.catalogRevision++;
+        reconcileCareReminders(next, clock, updatedWorkspace);
+      }
+      commit(next, updatedWorkspace);
+      return { state: scopedState(account, clock), taskIds, ...(memberId && { memberId }) };
     }
 
-    return { roster, scopedState, applyAction, refreshCareReminders, listAccounts: () => store.accounts.map(({ employee, username }) => ({ employee, username })), exportState: () => structuredClone(store) };
+    return { roster, scopedState, applyAction, refreshCareReminders, workspaceSnapshot: () => workspace,
+      listAccounts: () => store.accounts.map(({ employee, username }) => ({ employee, username })), exportState: () => structuredClone(store) };
   }
 
 if (typeof module !== 'undefined') module.exports = { createTeamStore, teamBusinessClock, teamCalendarTime, teamTodoReasons, teamAppointmentPending, teamTaskNeedsHandoff, teamCareReminderKey, teamMemberRecency, teamCarePhase };
