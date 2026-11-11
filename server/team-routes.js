@@ -11,7 +11,7 @@ function scopedSnapshot(account, tasks) {
     if (account.role === 'owner') return snapshot;
     const allowed = new Set(tasks.map(task => task.member_id));
     const data = { as_of_date: snapshot.as_of_date, snapshot_id: snapshot.snapshot_id, products: snapshot.products };
-    for (const key of ['members', 'orders', 'member_notes', 'member_care_profiles']) {
+    for (const key of ['members', 'orders', 'appointments', 'member_notes', 'member_care_profiles']) {
         data[key] = snapshot[key].filter(row => allowed.has(row.member_id));
     }
     return data;
@@ -30,7 +30,7 @@ async function enabledEmployees(tx) {
     return new Set(recordset.map(row => row.employee));
 }
 
-function registerTeamRoutes(app, pool, auth) {
+function registerTeamRoutes(app, pool, auth, { now } = {}) {
     // Register before the legacy 16 KB JSON parser: a compressed photo may be 1.4 MB.
     app.post('/api/team', require('express').json({ limit: '2mb' }), async (req, res, next) => {
         try {
@@ -39,7 +39,11 @@ function registerTeamRoutes(app, pool, auth) {
             const response = await transaction(pool, async tx => {
                 const account = await auth.requireAccount(req, tx);
                 const row = await tx.request().query('SELECT payload FROM dbo.TeamDemoState WHERE id=1');
-                const engine = createTeamStore(snapshot, { initialState: row.recordset[0] ? JSON.parse(row.recordset[0].payload) : null });
+                const requestTime = now?.() ?? new Date();
+                const engine = createTeamStore(snapshot, {
+                    initialState: row.recordset[0] ? JSON.parse(row.recordset[0].payload) : null,
+                    now: () => requestTime,
+                });
                 if (account.role === 'employee' && !engine.listAccounts().some(item => item.employee === account.employee))
                     throw Object.assign(new Error('员工账号不存在，请重新选择身份。'), { apiStatus: 403 });
                 if (readOnly) {

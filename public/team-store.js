@@ -24,6 +24,29 @@ function teamCalendarTime(now = new Date()) {
     return teamCalendarFormatter.format(now).replace(' ', 'T');
 }
 
+function teamBusinessClock(now = new Date()) {
+    const local = teamCalendarTime(now);
+    return { date: local.slice(0, 10), local, utc: now.toISOString() };
+}
+
+function teamDaysBetween(later, earlier) {
+    return (Date.parse(later) - Date.parse(earlier)) / 86400000;
+}
+
+function teamHasRecentContact(date, lastContact) {
+    return Boolean(lastContact && teamDaysBetween(date, lastContact) < 14);
+}
+
+function teamLatestScheduledAppointments(appointments) {
+    const dates = new Map();
+    for (const appointment of appointments || []) {
+        if (appointment.status === 'scheduled' && teamValidDate(appointment.appointment_date)
+            && appointment.appointment_date > (dates.get(appointment.member_id) || ''))
+            dates.set(appointment.member_id, appointment.appointment_date);
+    }
+    return dates;
+}
+
 function teamAppointmentPending(result) {
     return result?.booked && !['visited', 'no_show'].includes(result.appointment_status);
 }
@@ -63,6 +86,7 @@ function teamTodoReasons(task, date) {
     const noteTypes = ['preference', 'communication', 'service', 'care', 'appointment'];
     const careProfiles = new Map(snapshot.member_care_profiles.map(row => [row.member_id, row]));
     const snapshotNotes = new Map(snapshot.member_notes.map(row => [row.note_id, row]));
+    const scheduledAppointments = teamLatestScheduledAppointments(snapshot.appointments);
     const recentNails = new Map();
     for (const order of snapshot.orders) {
       if (order.order_type !== 'nail_service' || order.order_date > snapshot.as_of_date) continue;
@@ -72,9 +96,7 @@ function teamTodoReasons(task, date) {
 
     // Single-file preview. All fixture data and actions stay in this browser.
     const storageKey = 'nailmate-wechat-preview-v1-' + snapshot.snapshot_id;
-    const today = () => snapshot.as_of_date;
-    const calendarTime = () => teamCalendarTime(options.now?.());
-    const daysBetween = (later, earlier) => (Date.parse(later) - Date.parse(earlier)) / 86400000;
+    const clockNow = () => teamBusinessClock(options.now?.());
     let store = {
       accounts: roster.map((employee, index) => ({ employee, username: 'staff' + String(index + 1).padStart(2, '0'), role: 'employee' })),
       tasks: [], notes: [], noteEdits: {}, images: {}, memberUpdates: {}, care_records: [], logs: [], revision: 0,
@@ -85,6 +107,8 @@ function teamTodoReasons(task, date) {
     } catch {}
     // Older deletions left a blank login name behind in the employee list.
     store.accounts = store.accounts.filter(account => account.username);
+    for (const id of new Set(store.tasks.filter(task => task.result).map(task => task.member_id)))
+      rebuildMemberUpdates(store, id);
     const staff = () => store.accounts.map(account => account.employee);
     function commit(next) {
       next.revision = store.revision + 1;
@@ -102,7 +126,7 @@ function teamTodoReasons(task, date) {
       return value.trim();
     }
 
-    function scopedState(account) {
+    function scopedState(account, clock = clockNow()) {
       requireCondition(['owner', 'employee'].includes(account.role), 403, '请先选择身份登录。');
       const owner = account.role === 'owner';
       const tasks = owner ? store.tasks : store.tasks.filter(task => task.assignee === account.employee);
@@ -112,7 +136,7 @@ function teamTodoReasons(task, date) {
         allowed.has(snapshotNotes.get(id)?.member_id) || notes.some(note => note.note_id === id)));
       return {
         tasks, notes, noteEdits, images: store.images, revision: store.revision,
-        workDate: today(), calendarDate: calendarTime().slice(0, 10),
+        workDate: clock.date, calendarDate: clock.date,
         memberUpdates: owner ? store.memberUpdates : Object.fromEntries(Object.entries(store.memberUpdates).filter(([id]) => allowed.has(id))),
         logs: owner ? store.logs : [],
         care_records: owner ? store.care_records : [],
@@ -120,26 +144,38 @@ function teamTodoReasons(task, date) {
       };
     }
 
-    // These five fields are derived exclusively from recorded task results.
+    function feedbackDate(result) {
+      const stamp = result.recorded_at || result.updated_at;
+      if (stamp && Number.isFinite(Date.parse(stamp))) return teamBusinessClock(new Date(stamp)).date;
+      return result.recorded_on === snapshot.as_of_date ? undefined : result.recorded_on;
+    }
+
+    // Rebuild the derived fields from feedback, including older records with
+    // a UTC audit timestamp and a demo date in recorded_on.
     // Rebuild them after a correction so an old appointment/pause does not linger.
     function rebuildMemberUpdates(next, memberId) {
       const update = { ...next.memberUpdates[memberId] };
-      for (const key of ['last_contact_date', 'contact_recorded_on', 'appointment', 'consent', 'care_paused']) delete update[key];
+      for (const key of ['last_contact_date', 'contact_recorded_on', 'last_handled_on', 'appointment', 'consent', 'care_paused']) delete update[key];
       const memberTasks = next.tasks.filter(task => task.member_id === memberId);
       const results = memberTasks.filter(task => task.status === 'recorded' && task.result).map(task => task.result);
       // Updating a later pause/appointment cannot undo a contact that already happened.
-      const contacts = memberTasks.flatMap(task => task.result_history?.length ? task.result_history : task.result ? [task.result] : []);
-      const latestContact = contacts.filter(result => result.contacted).map(result => result.recorded_on).sort().at(-1);
-      if (latestContact) Object.assign(update, { last_contact_date: latestContact, contact_recorded_on: latestContact });
+      const histories = memberTasks.filter(task => task.result)
+        .map(task => task.result_history?.length ? task.result_history : [task.result]);
+      const latestContact = histories.map(history => history.find(result => result.contacted))
+        .filter(Boolean).map(result => result.contacted_on || feedbackDate(result)).filter(Boolean).sort().at(-1);
+      const latestHandled = histories.map(history => feedbackDate(history[0])).filter(Boolean).sort().at(-1);
+      if (latestContact) {
+        update.contact_recorded_on = latestContact;
+        update.last_contact_date = [latestContact, members.get(memberId)?.last_contact_date].filter(Boolean).sort().at(-1);
+      }
+      if (latestHandled) update.last_handled_on = latestHandled;
       if (results.some(teamAppointmentPending)) update.appointment = true;
       if (results.some(result => result.outcome === '不再营销')) update.consent = false;
       if (results.some(result => result.outcome === '暂不联系')) update.care_paused = true;
       next.memberUpdates[memberId] = update;
     }
 
-    function resultPlan(body, previous) {
-      const now = calendarTime();
-      const date = now.slice(0, 10);
+    function resultPlan(body, previous, { local: now, date }) {
       const followUpOn = body.followUpOn ?? previous?.follow_up_on ?? '';
       const followUpNote = field(body.followUpNote ?? previous?.follow_up_note ?? '', 180);
       requireCondition(followUpOn === '' || teamValidDate(followUpOn), 400, '请选择有效的跟进日期。');
@@ -176,28 +212,26 @@ function teamTodoReasons(task, date) {
       };
     }
 
-    function checkContact(next, id, objective, productId, workDate, newAssignment) {
+    function checkContact(next, id, objective, productId, date, newAssignment) {
       const m = members.get(id);
       const update = next.memberUpdates[id] || {};
       const product = products.get(productId);
-      const recent = update.contact_recorded_on
-        ? daysBetween(workDate, update.contact_recorded_on) < 14
-        : m.last_contact_date && daysBetween(snapshot.as_of_date, m.last_contact_date) < 14;
+      const recent = teamHasRecentContact(date, update.last_contact_date ?? m.last_contact_date);
       const reasons = [
         !(update.consent ?? m.marketing_consent) && '未获得营销授权',
         m.unresolved_complaint && '有未解决投诉',
         recent && '14 天内已联系',
-        (update.appointment ?? m.has_upcoming_appointment) && '已有未来预约',
+        (update.appointment || (scheduledAppointments.get(id) || '') >= date) && '已有未来预约',
         update.care_paused && '已标记暂不联系',
         m.data_completeness < .8 && '档案完整度不足',
       ].filter(Boolean);
       if (objective === 'care') {
         if (!careProfiles.get(id)?.care_followup_opt_in) reasons.push('未同意护理跟进');
-        if (newAssignment && !teamCareFollowupDue(recentNails.get(id), calendarTime().slice(0, 10)))
+        if (newAssignment && !teamCareFollowupDue(recentNails.get(id), date))
             reasons.push(`仅在最近一次美甲服务后第 ${TEAM_CARE_FOLLOWUP_DAY} 天进入护理回访推荐`);
       }
       if (objective === 'preview') {
-        const untilLaunch = daysBetween(product?.launch_date, workDate);
+        const untilLaunch = teamDaysBetween(product?.launch_date, date);
         if (m.lifecycle !== 'active' || product?.product_type !== 'nail_style' || !(untilLaunch >= 1 && untilLaunch <= 14)
           || !m.preferred_styles.split('|').includes(product.style)) reasons.push('不符合新品预告条件');
       }
@@ -208,7 +242,8 @@ function teamTodoReasons(task, date) {
       const action = body.action;
       requireCondition(account.role === (action === 'result' ? 'employee' : 'owner'), 403, '当前账号没有这项操作权限。');
       const next = structuredClone(store);
-      const date = today();
+      const clock = clockNow();
+      const { date, utc } = clock;
       let taskIds = [];
       switch (action) {
         case 'employeeAccount': {
@@ -244,7 +279,7 @@ function teamTodoReasons(task, date) {
               for (const result of task.result_history || []) result.recorded_by ||= employee;
               task.assignee = replacement;
               const handoff = replacement ? `转交给 ${replacement}` : '退回待交接';
-              task.history.push(`老板娘删除 ${employee} 的账号，未完成任务${handoff} · ${calendarTime().slice(0, 10)}`);
+              task.history.push(`老板娘删除 ${employee} 的账号，未完成任务${handoff} · ${date}`);
               taskIds.push(task.task_id);
             }
           }
@@ -263,11 +298,12 @@ function teamTodoReasons(task, date) {
             const product = products.get(productId);
             requireCondition(input.objective === 'greeting' ? productId === null : Boolean(product && (input.objective === 'preview' || product.is_active)), 400, '请选择有效的产品。');
             const reasons = checkContact(next, input.member_id, input.objective, productId, date, true);
-            if (next.care_records.some(record => record.member_id === input.member_id && record.recorded_as_of === date)) reasons.push('今天已有沟通记录');
+            if (next.memberUpdates[input.member_id]?.last_handled_on === date) reasons.push('今天已有沟通记录');
             requireCondition(!reasons.length, 409, `暂不可分派：${reasons.join('、')}。`);
             const id = 'T' + String(next.tasks.length + 1).padStart(4, '0');
             next.tasks.push({ task_id: id, member_id: input.member_id, objective: input.objective, strategy: objectives.get(input.objective),
-              assignee: input.assignee, product_id: productId, assigned_on: date, note: field(input.note, 180), reason: field(input.reason, 1200),
+              assignee: input.assignee, product_id: productId, assigned_on: date, assigned_at: utc, assigned_by: account.username || '老板娘',
+              note: field(input.note, 180), reason: field(input.reason, 1200),
               message: field(input.message, 1600, true), status: 'assigned', result: null, history: [`老板娘分派给 ${input.assignee} · ${date}`], data_type: 'simulation' });
             taskIds.push(id);
           }
@@ -303,19 +339,24 @@ function teamTodoReasons(task, date) {
           const note = field(body.note, 500);
           const contacted = body.outcome !== '暂不联系';
           const message = field(body.message, 1600) || task.message;
-          const plan = resultPlan(body, previous);
+          const plan = resultPlan(body, previous, clock);
           const oldStatus = previous?.appointment_status || (previous?.booked ? 'scheduled' : '');
           const samePlan = (previous?.follow_up_on || '') === plan.follow_up_on
             && (previous?.follow_up_note || '') === plan.follow_up_note
             && (previous?.appointment_at || '') === plan.appointment_at && oldStatus === plan.appointment_status;
           if (previous && previous.outcome === body.outcome && previous.note === note && task.message === message && samePlan)
-            return { state: scopedState(account), taskIds: [] };
+            return { state: scopedState(account, clock), taskIds: [] };
           task.result_history ||= previous ? [{ ...previous, revision, message: task.message }] : [];
           task.message = message;
           task.status = 'recorded';
           task.result_revision = revision + 1;
+          const firstFeedback = task.result_history[0];
+          const firstContact = task.result_history.find(entry => entry.contacted);
           task.result = { outcome: body.outcome, note, contacted, booked: body.outcome === '已预约',
-            ...plan, recorded_on: previous?.recorded_on || date, updated_at: new Date().toISOString(), recorded_by: account.employee };
+            ...plan, recorded_on: (firstFeedback && feedbackDate(firstFeedback)) || date,
+            recorded_at: firstFeedback ? firstFeedback.recorded_at || firstFeedback.updated_at : utc,
+            contacted_on: contacted ? (firstContact && (firstContact.contacted_on || feedbackDate(firstContact))) || date : undefined,
+            updated_at: utc, recorded_by: account.employee };
           task.result_history.push({ ...task.result, revision: task.result_revision, message });
           task.history.push(`${account.employee} ${previous ? `将「${previous.outcome}」更新为` : '记录'}「${body.outcome}」 · ${date} · 第 ${task.result_revision} 次保存`);
           const record = { task_id: task.task_id, member_id: task.member_id, outcome: body.outcome, note, owner: account.employee, recorded_as_of: task.result.recorded_on, data_type: 'simulation' };
@@ -329,7 +370,7 @@ function teamTodoReasons(task, date) {
           requireCondition(members.has(body.memberId), 400, '会员不存在。');
           const previous = body.noteId && (snapshotNotes.get(body.noteId) || next.notes.find(note => note.note_id === body.noteId));
           requireCondition(!body.noteId || previous?.member_id === body.memberId, 400, '备注不存在。');
-          const changes = { is_pinned: Boolean(body.pinned), updated_at: new Date().toISOString() };
+          const changes = { is_pinned: Boolean(body.pinned), updated_at: utc };
           if (body.text !== undefined) {
             requireCondition(noteTypes.includes(body.type), 400, '请选择备注类型。');
             Object.assign(changes, { note_text: field(body.text, 1200, true), note_type: body.type });
@@ -337,7 +378,7 @@ function teamTodoReasons(task, date) {
           if (previous) next.noteEdits[previous.note_id] = { ...next.noteEdits[previous.note_id], ...changes };
           else {
             requireCondition(changes.note_text, 400, '请填写备注。');
-            next.notes.push({ ...changes, note_id: 'NOTE-' + (crypto.randomUUID?.() || Date.now().toString(36) + Math.random().toString(36).slice(2)), member_id: body.memberId, author_name: '店主', author_role: 'owner', created_at: changes.updated_at });
+            next.notes.push({ ...changes, note_id: 'NOTE-' + crypto.randomUUID(), member_id: body.memberId, author_name: '店主', author_role: 'owner', created_at: changes.updated_at });
           }
           break;
         }
@@ -350,10 +391,10 @@ function teamTodoReasons(task, date) {
           requireCondition(false, 400, '未知操作。');
       }
       commit(next);
-      return { state: scopedState(account), taskIds };
+      return { state: scopedState(account, clock), taskIds };
     }
 
     return { roster, scopedState, applyAction, listAccounts: () => store.accounts.map(({ employee, username }) => ({ employee, username })), exportState: () => structuredClone(store) };
   }
 
-if (typeof module !== 'undefined') module.exports = { createTeamStore, teamCalendarTime, teamTodoReasons, teamAppointmentPending, teamTaskNeedsHandoff };
+if (typeof module !== 'undefined') module.exports = { createTeamStore, teamBusinessClock, teamCalendarTime, teamTodoReasons, teamAppointmentPending, teamTaskNeedsHandoff };

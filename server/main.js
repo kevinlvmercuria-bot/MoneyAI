@@ -29,7 +29,7 @@ function createApp(pool, options = {}) {
     const app = express();
     app.disable('x-powered-by');
     const auth = require('./team-auth').registerTeamAuth(app, pool);
-    require('./team-routes').registerTeamRoutes(app, pool, auth);
+    require('./team-routes').registerTeamRoutes(app, pool, auth, { now: options.teamNow });
     app.use('/api', auth.ownerOnly);
     const { registerImageRoutes, registerCopyRoutes } = require('./copy-routes');
     registerImageRoutes(app, pool);

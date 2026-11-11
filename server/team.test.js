@@ -5,7 +5,7 @@ const assert = require('node:assert/strict');
 const { randomBytes } = require('node:crypto');
 const { authenticate } = require('./test-auth-client');
 const snapshot = require('../data/team-data.json');
-const { createTeamStore, teamTodoReasons } = require('../public/team-store');
+const { createTeamStore, teamBusinessClock, teamTodoReasons } = require('../public/team-store');
 const { teamChartStages, teamChartTaskGroups, teamResultChart } = require('../public/team-chart');
 const owner = { role: 'owner', employee: '' };
 const eligible = snapshot.members.filter(m => m.marketing_consent && !m.unresolved_complaint && !m.has_upcoming_appointment && m.data_completeness >= .8 &&
@@ -41,7 +41,7 @@ test('新版分派原子性、员工归属、沟通限制和刷新恢复', () =>
 });
 
 test('后续反馈可修改，保留历史并按最新结果重算；冷却期不会拦截登记', () => {
-    const engine = createTeamStore(snapshot);
+    const engine = createTeamStore(snapshot, { now: () => new Date('2026-11-11T16:00:00Z') });
     const tasks = assignment(engine);
     const employee = { role: 'employee', employee: tasks[0].assignee };
     const { taskIds: [id] } = engine.applyAction(owner, { action: 'assign', tasks });
@@ -55,10 +55,10 @@ test('后续反馈可修改，保留历史并按最新结果重算；冷却期�
     assert.throws(() => save('已沟通', 1, '过期的页面'), /已更新/);
     save('有意向', 3, '取消原预约，时间另约');
     assert.equal(engine.scopedState(owner).memberUpdates[memberId].appointment, undefined);
-    assert.equal(engine.scopedState(owner).memberUpdates[memberId].contact_recorded_on, snapshot.as_of_date);
+    assert.equal(engine.scopedState(owner).memberUpdates[memberId].contact_recorded_on, '2026-11-12');
     save('暂不联系', 4, '这几天忙');
     assert.equal(engine.scopedState(owner).memberUpdates[memberId].care_paused, true);
-    assert.equal(engine.scopedState(owner).memberUpdates[memberId].contact_recorded_on, snapshot.as_of_date, '更新暂不联系不得撤销已经发生的联系冷却');
+    assert.equal(engine.scopedState(owner).memberUpdates[memberId].contact_recorded_on, '2026-11-12', '更新暂不联系不得撤销已经发生的联系冷却');
     save('不再营销', 5, '修改登记');
     assert.equal(engine.scopedState(owner).memberUpdates[memberId].care_paused, undefined);
     assert.equal(engine.scopedState(owner).memberUpdates[memberId].consent, false);
@@ -95,6 +95,46 @@ test('旧任务兼容后续修改；员工可读取负责顾客的完整新增�
     assert.equal(response.state.tasks[0].result_history[0].note, '旧记录');
     assert.equal(response.state.tasks[0].result_history[1].note, '后来回复了');
     assert.throws(() => restored.scopedState({ role: 'guest' }), /先选择身份/);
+});
+
+test('业务日期按北京时间跨零点，冷却满 14 个自然日后解除，审计保存 UTC', () => {
+    const member = eligible[0];
+    const fixture = { ...snapshot, members: [{ ...member, last_contact_date: '2026-11-01' }], appointments: [] };
+    let now = new Date('2026-11-14T15:59:59Z');
+    assert.equal(teamBusinessClock(now).date, '2026-11-14');
+    const engine = createTeamStore(fixture, { now: () => now });
+    const tasks = assignment(engine);
+    const assign = () => engine.applyAction(owner, { action: 'assign', tasks, workDate: '2100-01-01' });
+    assert.throws(assign, /14 天内已联系/);
+    now = new Date('2026-11-14T16:00:00Z');
+    assert.deepEqual(teamBusinessClock(now), { date: '2026-11-15', local: '2026-11-15T00:00', utc: '2026-11-14T16:00:00.000Z' });
+    const { taskIds: [id], state } = assign();
+    assert.equal(state.workDate, '2026-11-15');
+    assert.equal(state.tasks[0].assigned_on, '2026-11-15');
+    assert.equal(state.tasks[0].assigned_at, '2026-11-14T16:00:00.000Z');
+    const employee = { role: 'employee', employee: tasks[0].assignee };
+    const result = engine.applyAction(employee, { action: 'result', id, outcome: '已沟通', note: '', message: '' }).state.tasks[0].result;
+    assert.equal(result.recorded_on, '2026-11-15');
+    assert.equal(result.recorded_at, '2026-11-14T16:00:00.000Z');
+    now = new Date('2026-11-27T16:00:00Z');
+    const restarted = createTeamStore(fixture, { now: () => now, initialState: engine.exportState() });
+    assert.throws(() => restarted.applyAction(owner, { action: 'assign', tasks }), /14 天内已联系/);
+    now = new Date('2026-11-28T16:00:00Z');
+    assert.equal(restarted.applyAction(owner, { action: 'assign', tasks }).state.tasks[1].assigned_on, '2026-11-29');
+});
+
+test('旧反馈使用实际 UTC 审计时间恢复冷却口径，保留原始历史', () => {
+    const engine = createTeamStore(snapshot, { now: () => new Date('2026-11-15T10:00:00Z') });
+    const tasks = assignment(engine);
+    engine.applyAction(owner, { action: 'assign', tasks });
+    const saved = engine.exportState();
+    const task = saved.tasks[0];
+    task.status = 'recorded';
+    task.result = { contacted: true, outcome: '已沟通', recorded_on: snapshot.as_of_date, updated_at: '2026-11-14T16:00:00.000Z' };
+    const restarted = createTeamStore(snapshot, { now: () => new Date('2026-11-15T10:00:00Z'), initialState: saved });
+    assert.equal(restarted.scopedState(owner).memberUpdates[task.member_id].contact_recorded_on, '2026-11-15');
+    assert.equal(restarted.exportState().tasks[0].result.recorded_on, snapshot.as_of_date);
+    assert.throws(() => restarted.applyAction(owner, { action: 'assign', tasks }), /14 天内已联系/);
 });
 
 test('护理回访按最近一次美甲后的第 21 个北京时间日推荐，已分派任务可随后登记', () => {
@@ -183,7 +223,9 @@ test('SQL 账号、员工资料隔离、反馈并发与持久化', { timeout: 90
         await master.request().query(`CREATE DATABASE [${database}]`); created = true;
         pool = await connect(database);
         await initialize(pool);
-        server = createApp(pool).listen(0, '127.0.0.1');
+        let now = new Date('2026-11-11T15:59:59Z');
+        const teamNow = () => now;
+        server = createApp(pool, { teamNow }).listen(0, '127.0.0.1');
         await new Promise(resolve => server.once('listening', resolve));
         const base = 'http://127.0.0.1:' + server.address().port;
         const postTo = (request, url = base) => body => request(url + '/api/team', {
@@ -201,6 +243,13 @@ test('SQL 账号、员工资料隔离、反馈并发与持久化', { timeout: 90
         const initial = await response.json();
         assert.equal(initial.state.tasks.length, 0);
         assert.equal(initial.snapshot.members.length, 2800);
+        const poll = { action: 'state', revision: initial.state.revision, calendarDate: initial.state.calendarDate };
+        assert.equal(initial.state.calendarDate, '2026-11-11');
+        assert.equal((await post(poll)).status, 204);
+        now = new Date('2026-11-11T16:00:00Z');
+        const midnight = await (await post({ ...poll, now: '2100-01-01' })).json();
+        assert.equal(midnight.state.calendarDate, '2026-11-12');
+        assert.equal(midnight.state.revision, initial.state.revision);
         const engine = createTeamStore(snapshot);
         const tasks = assignment(engine);
         const employee = tasks[0].assignee;
@@ -240,7 +289,7 @@ test('SQL 账号、员工资料隔离、反馈并发与持久化', { timeout: 90
         assert.equal((await resetRequest(base + '/api/team/auth/logout', { method: 'POST' })).status, 204);
         assert.equal((await postTo(resetRequest)({ action: 'state' })).status, 401);
         await new Promise(resolve => server.close(resolve));
-        server = createApp(pool).listen(0, '127.0.0.1');
+        server = createApp(pool, { teamNow }).listen(0, '127.0.0.1');
         await new Promise(resolve => server.once('listening', resolve));
         const restartedBase = 'http://127.0.0.1:' + server.address().port;
         const restartedRequest = await authenticate(restartedBase, 'login');

@@ -44,11 +44,11 @@
   function allowedPage(page){return USER.role==='owner'||employeePages.includes(page)?page:'campaigns'}
   const AS_OF = DATA.as_of_date;
   let WORK_DATE=AS_OF;
-  const daysBetween=(later,earlier)=>(Date.parse(later)-Date.parse(earlier))/86400000;
+  const daysBetween=teamDaysBetween;
   const LABELS = {active:'活跃',due:'待复购',low_frequency:'低频',dormant:'沉睡'};
   const STATUSES = {assigned:'待联系',recorded:'已记录',archived:'已归档',executed_simulated:'历史模拟记录'};
   const OUTCOMES = ['未回复','有意向','已预约','已沟通','暂不联系','不再营销'];
-  let baseMembers,memberNoteIndex,memberOrderIndex,servicesByMember,memberCareIndex,memberProductIndex,recentNailVisits;
+  let baseMembers,memberNoteIndex,memberOrderIndex,servicesByMember,memberCareIndex,memberProductIndex,recentNailVisits,scheduledAppointments;
   function indexSnapshot(data) {
     DATA=data;
     baseMembers=data.members.map(m=>({...m,name:m.display_name,cycle:m.average_cycle_days,
@@ -56,6 +56,7 @@
       ratio:m.overdue_ratio,preference:m.preferred_styles.replaceAll('|',' / '),
       consent:m.marketing_consent,complaint:m.unresolved_complaint,appointment:m.has_upcoming_appointment}));
     memberNoteIndex=bucketMemberRows(data.member_notes);
+    scheduledAppointments=teamLatestScheduledAppointments(data.appointments);
     memberOrderIndex=bucketMemberRows(data.orders);
     servicesByMember=bucketMemberRows(data.orders.filter(order=>order.order_type==='nail_service'));
     memberCareIndex=new Map(data.member_care_profiles.map(row=>[row.member_id,row]));
@@ -73,15 +74,17 @@
   function emptyState(){return {members:[],tasks:[],notes:[],noteEdits:{},images:{},memberUpdates:{},accounts:[],logs:[],care_records:[],workDate:AS_OF,revision:0};}
   let state=emptyState();
   function applyState(shared,snapshot){
-    if(serverMode&&shared.revision<state.revision)return false;
+    if(serverMode&&(shared.revision<state.revision
+      || (shared.revision===state.revision&&shared.calendarDate<state.calendarDate)))return false;
     if(snapshot)indexSnapshot(snapshot);
     const ids=new Set(shared.tasks.map(task=>task.member_id));
     const visibleMembers=USER.role==='employee'?baseMembers.filter(m=>ids.has(m.member_id)):baseMembers;
     WORK_DATE=shared.workDate;
     const members=visibleMembers.map(base=>{
       const m={...base,...shared.memberUpdates[base.member_id]};
-      const recorded=m.contact_recorded_on;
-      m.recent=Boolean(recorded?daysBetween(WORK_DATE,recorded)<14:m.last_contact_date&&daysBetween(AS_OF,m.last_contact_date)<14);
+      m.recent=teamHasRecentContact(WORK_DATE,m.last_contact_date);
+      m.appointment=Boolean(shared.memberUpdates[base.member_id]?.appointment
+        || (scheduledAppointments.get(m.member_id)||'')>=WORK_DATE);
       return m;
     });
     state={...shared,members};
@@ -321,9 +324,6 @@
   // The library includes existing products plus an explicitly unlisted style idea.
   const CATALOG_TYPES={nail_style:'美甲款式',care_product:'护理产品',care_service:'护理服务'};
   const CATALOG_IDEAS=[{product_id:'IDEA-SEA-SALT',product_name:'海盐冰气泡',product_type:'nail_style',style:'清透灵感',description:'清透海盐蓝底色，搭配细小气泡与冰透光泽。',image_plan:'清透海盐蓝 · 气泡点缀 · 短椭圆甲',planned:true,launch_date:'2026-11-14',preview_styles:['裸色']}];
-  const upcomingPreviews=[...CATALOG_IDEAS,...DATA.products]
-    .filter(p=>p.product_type==='nail_style'&&p.launch_date>WORK_DATE&&daysBetween(p.launch_date,WORK_DATE)<=14)
-    .sort((a,b)=>a.launch_date.localeCompare(b.launch_date)||a.product_id.localeCompare(b.product_id));
   const CATALOG_PAGE_SIZE=8;
   Object.assign(ui,{catalogFilter:'all',catalogQuery:'',catalogPage:1,catalogPending:false,catalogUpload:null});
   function catalogEntries(){return [...CATALOG_IDEAS,...DATA.products.filter(p=>p.is_active)]}
@@ -559,7 +559,10 @@
   function matchingPreviews(m) {
     if(m.lifecycle!=='active')return [];
     const styles=m.preferred_styles.split('|');
-    return upcomingPreviews.filter(p=>(p.preview_styles||[p.style]).some(style=>styles.includes(style)));
+    return [...CATALOG_IDEAS,...DATA.products]
+      .filter(p=>p.product_type==='nail_style'&&p.launch_date>WORK_DATE&&daysBetween(p.launch_date,WORK_DATE)<=14
+        &&(p.preview_styles||[p.style]).some(style=>styles.includes(style)))
+      .sort((a,b)=>a.launch_date.localeCompare(b.launch_date)||a.product_id.localeCompare(b.product_id));
   }
   function matchesOpportunity(m,key){
     if(key==='repurchase')return ['due','low_frequency','dormant'].includes(m.lifecycle);
@@ -572,10 +575,9 @@
   }
   function opportunityGroups() {
     const groups=Object.fromEntries(OPPORTUNITY_PRIORITY.map(key=>[key,[]]));
-    const handled=new Set((state.care_records||[]).filter(r=>r.recorded_as_of===WORK_DATE).map(r=>r.member_id));
     const queued=new Set(state.tasks.filter(t=>t.status==='assigned').map(t=>t.member_id));
     for(const m of state.members) {
-      if(handled.has(m.member_id)||queued.has(m.member_id)||memberBlockers(m).length)continue;
+      if(m.last_handled_on===WORK_DATE||queued.has(m.member_id)||memberBlockers(m).length)continue;
       for(const key of OPPORTUNITY_PRIORITY)if(matchesOpportunity(m,key))groups[key].push(m);
     }
     return groups;
@@ -748,7 +750,7 @@
       const task={member_id:m.member_id,objective:pick.objective,
         product_id:p?.product_id||null,assignee,note:pick.note.trim()};
       const reasons=taskContactBlockers(task);
-      if((state.care_records||[]).some(r=>r.member_id===m.member_id&&r.recorded_as_of===WORK_DATE))reasons.push('今天已有沟通记录');
+      if(m.last_handled_on===WORK_DATE)reasons.push('今天已有沟通记录');
       if(!p&&!isNoProductObjective(pick.objective))reasons.push('暂缺匹配款式或服务');
       if(reasons.length)throw new Error(`${m.name} 暂不可分派：${reasons.join('、')}。`);
       task.reason=opportunityEvidence(m,pick.objective,p);
@@ -780,7 +782,7 @@
       ${notes.length?notes.map(note=>`<article class="profile-note"><div class="profile-note-meta"><span>${note.is_pinned?'<b class="note-pinned">置顶 · </b>':''}${escape(NOTE_LABELS[note.note_type]||'店主备注')} · ${escape(note.author_name||'店主')}</span></div><p>${escape(note.note_text)}</p></article>`).join(''):'<p class="helper">老板娘还没有为这位顾客添加备注。</p>'}</details>`;
   }
   function todoReasons(task) {
-    return teamTodoReasons(task,state.calendarDate || teamCalendarTime().slice(0,10));
+    return teamTodoReasons(task,state.calendarDate);
   }
   function awaitingHandoff(task) {
     return !task.assignee && teamTaskNeedsHandoff(task);
