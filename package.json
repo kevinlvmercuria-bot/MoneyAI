@@ -7,6 +7,8 @@
     "node": ">=22.13.0"
   },
   "scripts": {
+    "data:prepare": "node scripts/prepare-demo-data.js",
+    "db:migrate": "node database/migrate.js",
     "start": "node server/main.js",
     "dev": "node --watch server/main.js",
     "db:init": "node database/setup.js",

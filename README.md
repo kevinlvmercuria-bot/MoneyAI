@@ -2,12 +2,15 @@
 
 门店会员联系工作台，内置 2,800 位模拟会员，支持老板娘手工建档和登记美甲完成。联系进度展示从分派到到店的各阶段，保留柱状图的进入视口动效和重播按钮。当前可运行的是本地 SQL Server 版，Neon 和 Render 是下一阶段的部署目标。
 
+`main` 作为团队共同维护入口。V4.1 的新版功能来自 `deploy/neon-render`；后续功能和部署适配通过独立分支及 PR 整合，保留原部署分支供追溯。
+
 ## 本地启动
 
 需要 Node.js 22.13+、SQL Server 2016+（兼容级别 130+）。
 
 ```powershell
 npm ci
+npm run data:prepare
 # 首次配置：复制 .env.example 为 .env，并填写本机 SQL Server 配置。
 # 本机实例可在 Windows 服务中查看；已有 .env 不要覆盖。
 npm run db:init
@@ -16,7 +19,9 @@ npm start
 
 打开 http://127.0.0.1:3000。已完成环境配置时也可以双击 `启动NailMate.cmd`。服务监听本机，`.env` 保存在本机。
 
-部署分支的全新检出需从受控备份取回 `data/team-data.json` 供当前账号版使用。`data/nailmate.db` 供旧版来源导入及部分测试使用。文件位置和本地回退方式见 [部署交接记录](docs/deployment/HANDOFF.md)。
+`npm run data:prepare` 从仓库历史中的分享版恢复账号版模拟快照，并恢复旧版 SQLite 模拟来源，已有文件原样保留。此命令不连接 SQL Server，不恢复真实顾客资料、员工账号或业务记录。使用完整 Git 检出；若提示缺少历史对象，先运行 `git fetch origin`。两份数据使用各自原有模拟基线，账号版历史备注不包含旧版后来追加的性格备注。
+
+**从已有本地版升级**：先备份当前 SQL Server、`.env` 和 `data/`，执行 `npm run data:prepare`、`npm run db:migrate` 后再启动。`db:migrate` 只在事务中升级结构，不执行来源导入、不清空业务数据；可以重复执行。全新数据库才按上面的 `db:init` 初始化和导入。新版与旧版任务分别保存，旧任务仍通过 `/legacy.html` 查看。文件位置和回退记录见 [部署交接记录](docs/deployment/HANDOFF.md)。
 
 首次进入账号版时创建老板娘账号，再从右上角的「员工账号管理」为已有员工设置密码。已有任务仍归原负责人。新分派可选择已开通登录的员工。登录有效期为 8 小时，服务重启后需重新登录。
 
@@ -77,6 +82,8 @@ node scripts/build-share.js C:\path\NailMate.html
 | `server/team-routes.js` | SQL 持久化接口 |
 | `server/team-auth.js`、`database/team-auth.sql` | 本地账号、会话与密码存储 |
 | `scripts/build-share.js` | 从维护源码生成分享文件 |
+| `scripts/prepare-demo-data.js` | 从 Git 历史恢复模拟运行资料，保留已有文件 |
+| `database/migrate.js`、`setup.js` | 只升级结构，以及首次初始化与导入 |
 | `public/legacy.html`、`workspace-legacy.js`、`pages/` | 保留旧版工作台和真实 AI 接口 |
 
 ## 线上试用计划

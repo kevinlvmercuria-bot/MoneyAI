@@ -179,6 +179,16 @@ GitHub API 实查的远端为 `https://github.com/kevinlvmercuria-bot/MoneyAI.gi
 - 已将建档、护理回访冷却、误派撤回、推荐布局、通用档案编辑、会员编号和表达方式更新推送到 `origin/deploy/neon-render`，功能提交为 `4d4db31765e8ca1abda40e58e510b014ead681bc`。
 - V4.1 源码发布使用 Git 标签 `v4.1` 和项目版本 `4.1.0`。发布包依照 README 单独准备运行数据和本地配置。
 
+### 2026-11-12 V4.1 整合与另一台开发机验收
+
+- 本轮在 `NailMate-GitHub` 工作区从 `origin/deploy/neon-render` 的 `c02412c` 建立 `integrate/v4.1-local`，原 `main` 的 `3130646` 留在本地 `backup/main-before-v4.1-20261112`。原 `NailMate` 目录未修改。整合目标是将验证过的新版通过 PR 纳入 `main`；保留原部署分支与 `v4.1` 标签，最终合并状态以 GitHub PR 和分支为准。Neon、Render 仍未执行。
+- 新增 `npm run data:prepare`，从已存在的历史分享版 `09ca7b6` 提取原账号版模拟快照，从 `3130646` 恢复旧版 SQLite 来源。两份模拟基线分别保留，已有文件不会覆盖；无效快照或缺少历史对象时明确报错。账号版快照包含 2,800 位会员及原有 1,537 条备注，SQLite 仍保留后来追加的性格备注。没有导入同学电脑的真实账号或业务状态。
+- 新增 `npm run db:migrate`，复用首次初始化的结构迁移，在事务中执行，但不导入来源、不初始化演示任务。全新数据库继续使用 `db:init`。README 已分别说明全新启动与已有数据库升级；仅忽略辅助目录中的临时文件和日志，其他辅助文件按用途决定是否跟踪。
+- 本机 `localhost\\SQLEXPRESS01/NailMate` 升级前完成 `COPY_ONLY, CHECKSUM` 备份及 `RESTORE VERIFYONLY`。备份在 SQL Server 默认 Backup 目录，文件名为 `NailMate-before-v41-integration-1794452730223.bak`。备份目录由 SQL Server 管理，未复制到源码目录。恢复到随机命名的独立库，`DBCC CHECKDB` 通过；连续两次结构迁移后，原有各表的记录数量及内容 SHA-256 一致。随后升级现用库，原各表同样通过数量及内容核对，原 `.env` 和 SQLite 字节保持一致。
+- 本轮实际执行语法检查、新版 16 项、业务回归 32 项及旧版 2 项测试，全部通过。通过独立恢复库中的浏览器操作验证老板娘登录与分派、员工登录与待办、反馈保存、刷新后历史反馈可读取；测试库随后清理。未调用真实 AI，也没有发送真实客户消息。
+- 在临时全新检出中，`npm ci --prefer-offline`、首次与重复 `data:prepare`、`build:share`、语法检查通过。生成的分享文件仅留在本地。现用新版通过隐藏 Node 进程运行于 `127.0.0.1:3000`；首页、脚本、会话接口返回 200，未登录的账号版请求返回 401。现用库尚无老板娘凭据，首次账号由使用者自行设置，测试凭据仅用于已清理的独立库。
+- 本机辅助证据在 `codex-artifacts/reports/integration-20261112.json`；日志在 `codex-artifacts/logs/`，配置及 SQLite 备份、全新检出与临时验证脚本在 `codex-artifacts/tmp/integration-20261112/`。这些本机材料未提交，报告通过本地 Git exclude 单独排除。
+
 ## 下一轮从这里继续
 
 当前优先完善本地网站功能。手工建档、美甲完成登记、护理回访冷却和误派撤回已通过本地验收。收到恢复部署的指示后，从第三阶段继续，准备独立 Neon 试用库并核对迁移范围，重点包括手工档案及服务记录、`TeamCareReminders` 的唯一键、事务与访问控制。

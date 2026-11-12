@@ -4,7 +4,8 @@ node_modules/
 !.env.example
 *.log
 coverage/
-/codex-artifacts/
+/codex-artifacts/tmp/
+/codex-artifacts/logs/
 /.playwright-cli/
 /backups/
 

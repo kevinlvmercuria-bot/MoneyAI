@@ -6,11 +6,15 @@ const { sql, connect, transaction } = require('../server/db');
 const { seedTask } = require('../server/store');
 const { members, demoMember } = require('./demo-data');
 
+async function migrate(tx) {
+    await tx.request().batch(readFileSync(path.join(__dirname, 'schema.sql'), 'utf8'));
+    await require('../server/team-auth').initializeTeamAuth(tx);
+    await require('../server/team-reminders').initializeTeamCareReminders(tx);
+}
+
 async function initialize(pool) {
     await transaction(pool, async (tx) => {
-        await tx.request().batch(readFileSync(path.join(__dirname, 'schema.sql'), 'utf8'));
-        await require('../server/team-auth').initializeTeamAuth(tx);
-        await require('../server/team-reminders').initializeTeamCareReminders(tx);
+        await migrate(tx);
         const { recordset } = await tx.request().query('SELECT COUNT(*) AS total FROM dbo.Members');
         if (recordset[0].total) {
             console.log('演示会员已存在，跳过初始化数据。');
@@ -44,4 +48,4 @@ if (require.main === module) {
     });
 }
 
-module.exports = { initialize };
+module.exports = { initialize, migrate };
