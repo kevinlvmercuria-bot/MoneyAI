@@ -1,12 +1,14 @@
 {
   "name": "nailmate",
-  "version": "4.0.0",
+  "version": "4.1.0",
   "private": true,
   "description": "NailMate Express API and SQL Server integration scaffold",
   "engines": {
     "node": ">=22.13.0"
   },
   "scripts": {
+    "data:prepare": "node scripts/prepare-demo-data.js",
+    "db:migrate": "node database/migrate.js",
     "start": "node server/main.js",
     "dev": "node --watch server/main.js",
     "db:init": "node database/setup.js",
@@ -14,7 +16,9 @@
     "check": "node scripts/check.js",
     "test:legacy": "node --test server/app.test.js",
     "db:import": "node database/import-source.js",
-    "db:personality-notes": "node database/personality-notes.js"
+    "db:personality-notes": "node database/personality-notes.js",
+    "build:share": "node scripts/build-share.js",
+    "test:team": "node --test server/team.test.js"
   },
   "dependencies": {
     "dotenv": "18.0.9",

@@ -1,135 +1,45 @@
 <!doctype html>
-<html lang="zh-CN">
-    <head>
-        <meta charset="utf-8" />
-        <meta name="viewport" content="width=device-width,initial-scale=1" />
-        <title>NailMate AI · 关系经营工作台</title>
-        <link rel="stylesheet" href="styles.css" />
-    </head>
-    <body id="app">
-        <a class="skip-link" href="#main">跳到主要内容</a>
-        <nav class="atelier-dock" aria-label="工作空间">
-            <button type="button" data-view="dashboard" aria-label="今日复购计划">
-                <svg class="dock-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-                    <rect x="3.5" y="5.5" width="17" height="15" rx="3" />
-                    <path d="M7.5 3.5v4m9-4v4M4 10h16m-11 5 2 2 4-4" /></svg
-                ><span class="dock-tip" aria-hidden="true">今日复购计划</span>
-            </button>
-            <button type="button" data-view="members" aria-label="会员档案">
-                <svg class="dock-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-                    <circle cx="10" cy="8" r="3.2" />
-                    <path
-                        d="M3.8 19v-1.4a5 5 0 0 1 5-5h2.4a5 5 0 0 1 5 5V19m.8-14a3.2 3.2 0 0 1 0 6.2m1.3 2.2a4.5 4.5 0 0 1 2.4 4V19"
-                    /></svg
-                ><span class="dock-tip" aria-hidden="true">会员档案</span>
-            </button>
-            <button type="button" data-view="campaigns" aria-label="任务审核">
-                <svg class="dock-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-                    <rect x="5" y="4" width="14" height="17" rx="2.5" />
-                    <path
-                        d="M9 4.5v-1a.5.5 0 0 1 .5-.5h5a.5.5 0 0 1 .5.5v1A1.5 1.5 0 0 1 13.5 6h-3A1.5 1.5 0 0 1 9 4.5ZM8.5 13l2.2 2.2 4.8-4.7"
-                    /></svg
-                ><span class="dock-pending" id="pending-badge" hidden></span
-                ><span class="dock-tip" aria-hidden="true">任务审核</span>
-            </button>
-            <button type="button" data-view="reports" aria-label="复购结果">
-                <svg class="dock-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-                    <path
-                        d="M4.5 4.5v14a1 1 0 0 0 1 1h14m-12-4 3.8-3.8 3 1.8 4.2-5.3m-3 .1h3.2v3.2"
-                    /></svg
-                ><span class="dock-tip" aria-hidden="true">复购结果</span>
-            </button>
-            <button type="button" data-view="products" aria-label="产品库">
-                <svg class="dock-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-                    <rect x="6.3" y="10" width="11.4" height="10.8" rx="2.4" />
-                    <rect x="9" y="3.2" width="6" height="6.8" rx="1.3" />
-                    <path d="M12 12.4v4.2m-2.1-2.1h4.2" /></svg
-                ><span class="dock-tip" aria-hidden="true">产品库</span>
-            </button>
-            <button type="button" data-view="studio" aria-label="话术工作台">
-                <svg class="dock-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-                    <path
-                        d="M19.8 13.9a3 3 0 0 1-3 3h-4.1L7.2 21v-4.1h-.8a3 3 0 0 1-3-3V7.3a3 3 0 0 1 3-3h10.4a3 3 0 0 1 3 3Z"
-                    />
-                    <path d="M8 9h7.5M8 12.3h5" /></svg
-                ><span class="dock-tip" aria-hidden="true">话术工作台</span>
-            </button>
-        </nav>
-        <main id="main" tabindex="-1">
-            <header>
-                <div class="edition">
-                    <div class="edition-brand">
-                        <span class="brand">Nailmate <span aria-hidden="true">✧</span></span
-                        ><span class="edition-section" id="edition-name">THE STUDIO</span>
-                    </div>
-                    <div class="edition-actions">
-                        <span>DEMO EDITION · 2026-11-07</span>
-                        <details class="demo-tools" id="demo-tools">
-                            <summary>演示工具</summary>
-                            <div class="demo-tools-panel">
-                                <strong>重置界面</strong>
-                                <p>回到今日计划，清除筛选和未保存草稿。已保存记录与图片保留。</p>
-                                <button type="button" data-action="reset-interface">
-                                    重置界面
-                                </button>
-                                <details>
-                                    <summary>清空演示数据</summary>
-                                    <p>
-                                        将清空任务、AI
-                                        文案、沟通反馈和日志；图片与会员资料保留。操作前需再次确认。
-                                    </p>
-                                    <button type="button" data-action="reset">清空演示数据</button>
-                                </details>
-                            </div>
-                        </details>
-                    </div>
-                </div>
-                <div class="page-heading">
-                    <div>
-                        <p id="page-index" class="eyebrow">01 / 工作空间</p>
-                        <h1 id="page-title">经营驾驶舱</h1>
-                        <p id="page-motto">指尖的美好，值得再次相见。</p>
-                    </div>
-                    <div class="nail-composition" aria-hidden="true">
-                        <i class="nail nail-rose"></i><i class="nail nail-french"></i
-                        ><i class="nail nail-wine"></i>
-                    </div>
-                </div>
-                <div class="simulation-strip">
-                    <b>SIMULATION</b
-                    ><span
-                        ><span data-member-count>加载中</span> 位虚拟会员 · AI 辅助 · 未发送真实消息
-                        · 非真实经营成果</span
-                    >
-                </div>
-            </header>
-            <div id="notice" role="status" aria-live="polite" hidden></div>
-            <section id="content" aria-label="页面内容"><p>正在读取会员资料…</p></section>
-            <footer>
-                <details>
-                    <summary>演示操作记录</summary>
-                    <ol id="logs"></ol>
-                </details>
-                <p>NailMate AI · 会员与经营结果为模拟数据 · 文案由店主核对后自行发送</p>
-            </footer>
-        </main>
-        <div class="choice-popover" id="choice-popover" popover="auto" hidden>
-            <input
-                class="choice-search"
-                type="search"
-                placeholder="搜索会员姓名或编号"
-                aria-label="搜索会员姓名或编号"
-                autocomplete="off"
-                hidden
-            />
-            <div class="choice-options" id="choice-options" role="listbox"></div>
-            <p class="choice-empty" role="status" hidden>没有找到匹配的选项。</p>
-        </div>
-        <noscript
-            >请启用 JavaScript，以使用会员筛选、关怀卡和审核功能。本文件不会向外发送消息。</noscript
-        >
-        <div id="overlay"></div>
-        <div id="toaster" role="status" aria-live="polite"></div>
-        <script type="module" src="workspace.js"></script>
-    </body>
+<html lang="zh-CN" data-persistence="server">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <meta name="color-scheme" content="light">
+  <title>NailMate AI · 门店联系工作台</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect x='8' y='3' width='16' height='26' rx='8' fill='%2397516c'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="styles/team.css">
+  <link rel="stylesheet" href="styles/team-chart.css">
+</head>
+<body>
+  <a class="skip-link" href="#main">跳到主要内容</a>
+  <nav class="atelier-dock" aria-label="工作空间" hidden>
+    <button type="button" data-page="dashboard" aria-label="今日联系计划"><svg class="dock-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><rect x="3.5" y="5.5" width="17" height="15" rx="3"/><path d="M7.5 3.5v4m9-4v4M4 10h16m-11 5 2 2 4-4"/></svg><span class="dock-tip" aria-hidden="true">今日联系计划</span></button>
+    <button type="button" data-page="members" aria-label="会员档案"><svg class="dock-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="10" cy="8" r="3.2"/><path d="M3.8 19v-1.4a5 5 0 0 1 5-5h2.4a5 5 0 0 1 5 5V19m.8-14a3.2 3.2 0 0 1 0 6.2m1.3 2.2a4.5 4.5 0 0 1 2.4 4V19"/></svg><span class="dock-tip" aria-hidden="true">会员档案</span></button>
+    <button type="button" data-page="campaigns" aria-label="联系任务"><svg class="dock-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><rect x="5" y="4" width="14" height="17" rx="2.5"/><path d="M9 4.5v-1a.5.5 0 0 1 .5-.5h5a.5.5 0 0 1 .5.5v1A1.5 1.5 0 0 1 13.5 6h-3A1.5 1.5 0 0 1 9 4.5ZM8.5 13l2.2 2.2 4.8-4.7"/></svg><span class="dock-pending" id="pending-badge" hidden></span><span class="dock-tip" aria-hidden="true">联系任务</span></button>
+    <button type="button" data-page="reports" aria-label="联系进度"><svg class="dock-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M4.5 4.5v14a1 1 0 0 0 1 1h14m-12-4 3.8-3.8 3 1.8 4.2-5.3m-3 .1h3.2v3.2"/></svg><span class="dock-tip" aria-hidden="true">联系进度</span></button>
+    <button type="button" data-page="products" aria-label="产品库"><svg class="dock-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><rect x="6.3" y="10" width="11.4" height="10.8" rx="2.4"/><rect x="9" y="3.2" width="6" height="6.8" rx="1.3"/><path d="M12 12.4v4.2m-2.1-2.1h4.2"/></svg><span class="dock-tip" aria-hidden="true">产品库</span></button>
+    <button type="button" data-page="studio" aria-label="话术工作台"><svg class="dock-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M19.8 13.9a3 3 0 0 1-3 3h-4.1L7.2 21v-4.1h-.8a3 3 0 0 1-3-3V7.3a3 3 0 0 1 3-3h10.4a3 3 0 0 1 3 3Z"/><path d="M8 9h7.5M8 12.3h5"/></svg><span class="dock-tip" aria-hidden="true">话术工作台</span></button>
+  </nav>
+  <main id="main" tabindex="-1">
+    <header><div class="edition"><div class="edition-brand"><span class="brand">Nailmate <span aria-hidden="true">✧</span></span><span class="edition-section" id="edition-name">THE STUDIO</span></div><div class="edition-account"><span class="edition-date">DEMO EDITION · 2026-11-07</span><details class="account-menu" id="account-menu" hidden><summary><span id="account-name">老板娘</span><svg class="account-chevron" viewBox="0 0 12 12" aria-hidden="true" focusable="false"><path d="m3 4.5 3 3 3-3" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></summary><div class="account-panel"><p class="account-caption">账号管理</p><div id="preview-identity-switch" hidden><label for="preview-role">切换身份</label><select id="preview-role"></select></div><button data-page="accounts" id="preview-accounts">员工账号管理</button><button type="button" id="logout-button">退出登录</button></div></details><span id="signed-out-label" hidden>未登录</span></div></div>
+      <div class="page-heading"><div><p id="page-index" class="eyebrow">01 / 工作空间</p><h1 id="page-title">经营驾驶舱</h1><p id="page-motto">指尖的美好，值得再次相见。</p></div><div class="nail-composition" aria-hidden="true"><i class="nail nail-rose"></i><i class="nail nail-french"></i><i class="nail nail-wine"></i></div></div>
+      <div class="simulation-strip"><b>门店数据</b><span>门店工作台 · 含模拟会员数据</span></div>
+    </header>
+    <div id="notice" role="status" aria-live="polite" hidden></div>
+    <section id="content" aria-label="页面内容"></section>
+    <footer><details id="owner-footer"><summary>门店操作记录</summary><ol id="logs"></ol></details><p>NailMate AI · 门店联系工作台 · 演示记录保存在门店数据库</p></footer>
+  </main>
+  <div class="choice-popover" id="choice-popover" popover="auto" hidden>
+    <input class="choice-search" type="search" placeholder="搜索会员姓名或编号" aria-label="搜索会员姓名或编号" autocomplete="off" hidden>
+    <div class="choice-options" id="choice-options" role="listbox"></div>
+    <p class="choice-empty" role="status" hidden>没有找到匹配的选项。</p>
+  </div>
+  <noscript>请启用 JavaScript，以使用会员筛选、任务分派和结果记录。本文件不会向外发送消息。</noscript>
+
+
+
+  <script src="communication.js"></script>
+  <script src="team-store.js"></script>
+  <script src="team-chart.js"></script>
+  <script type="module" src="workspace.js"></script>
+</body>
 </html>

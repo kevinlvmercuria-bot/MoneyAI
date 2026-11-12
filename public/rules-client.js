@@ -14,6 +14,7 @@ export const {
     goalCandidates,
     buildReviewTask,
     DEMO_DATE,
+    CARE_FOLLOWUP_DAY,
     CARE_OUTCOMES,
     PLANNED_PRODUCTS,
     OBJECTIVES,

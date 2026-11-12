@@ -5,6 +5,7 @@ const { randomBytes } = require('node:crypto');
 const { connect, transaction, sql } = require('./db');
 const store = require('./store');
 const { createApp } = require('./main');
+const { authenticate } = require('./test-auth-client');
 const { initialize } = require('../database/setup');
 const { importSource } = require('../database/import-source');
 const rules = require('../public/rules');
@@ -45,13 +46,14 @@ test('关系经营版 API 与持久化验收', { timeout: 90000 }, async (t) => 
         }).listen(0, '127.0.0.1');
         await new Promise((resolve) => server.once('listening', resolve));
         const base = 'http://127.0.0.1:' + server.address().port;
+        const request = await authenticate(base, 'setup');
         const post = (path, body) =>
-            fetch(base + '/api' + path, {
+            request(base + '/api' + path, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(body),
             });
-        const snapshot = async () => (await fetch(base + '/api/state')).json();
+        const snapshot = async () => (await request(base + '/api/state')).json();
         const free = (state) =>
             state.members.filter(
                 (member) =>
@@ -79,8 +81,7 @@ test('关系经营版 API 与持久化验收', { timeout: 90000 }, async (t) => 
             assert.ok(
                 groups.care.every(
                     (member) =>
-                        member.recentNailVisit.days >= 1 &&
-                        member.recentNailVisit.days <= 7 &&
+                        member.recentNailVisit.days === 21 &&
                         member.careProfile.optIn,
                 ),
             );
@@ -364,7 +365,7 @@ test('关系经营版 API 与持久化验收', { timeout: 90000 }, async (t) => 
             );
             await initialize(pool);
             const details = await (
-                await fetch(base + '/api/members/' + memberId + '/details')
+                await request(base + '/api/members/' + memberId + '/details')
             ).json();
             assert.ok(details.notes.some((note) => note.note_text === '偏好短方圆甲'));
             const source = await transaction(

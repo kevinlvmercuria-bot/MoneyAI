@@ -83,7 +83,6 @@ async function state(tx) {
         if (
             order.order_type !== 'nail_service' ||
             days < 0 ||
-            days > 7 ||
             (visits.has(row.memberId) && visits.get(row.memberId).days <= days)
         )
             continue;

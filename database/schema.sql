@@ -126,6 +126,14 @@ IF OBJECT_ID(N'dbo.MemberNoteEdits', N'U') IS NULL
     );
 
 -- v4 回访续接保留每次反馈，旧记录不覆盖。
+-- Team workflow is stored independently; migration preserves historical review tasks.
+IF OBJECT_ID(N'dbo.TeamDemoState', N'U') IS NULL
+    CREATE TABLE dbo.TeamDemoState (
+        id int NOT NULL PRIMARY KEY CHECK (id=1),
+        payload nvarchar(max) NOT NULL CHECK (ISJSON(payload)=1),
+        updated_at datetime2 NOT NULL DEFAULT SYSUTCDATETIME()
+    );
+
 DECLARE @careUnique sysname;
 SELECT TOP(1) @careUnique=kc.name FROM sys.key_constraints kc
 JOIN sys.index_columns ic ON ic.object_id=kc.parent_object_id AND ic.index_id=kc.unique_index_id
