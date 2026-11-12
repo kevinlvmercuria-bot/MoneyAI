@@ -6,8 +6,9 @@
 
 ## 开发入口
 
-- 新版账号工作台从 `public/index.html` 和 `public/workspace.js` 加载。页面与交互在 `public/team-workspace.js`，服务端与分享版共用的业务规则在 `public/team-store.js`，进度图表在 `public/team-chart.js`。
-- 本地服务从 `server/main.js` 启动。新版接口和账号权限分别在 `server/team-routes.js`、`server/team-auth.js`。旧版 AI 审核入口为 `/legacy.html`，开发时根据入口确认实际调用链。
+- 新版账号工作台从 `public/index.html` 和 `public/workspace.js` 加载。`public/team-workspace.js` 协调初始化、导航与刷新，页面位于 `public/app/pages/`，状态、请求、身份和交互位于 `public/app/`。业务操作在 `public/team-store.js`，纯业务规则在 `public/shared/team-rules.js`，存储适配在 `public/shared/team-persistence.js`，进度图表在 `public/team-chart.js`。
+- 本地服务从 `server/main.js` 启动，`server/app.js` 装配 HTTP 应用。新版接口、SQL 读写和账号权限分别在 `server/team-routes.js`、`server/team-repository.js`、`server/team-auth.js`。旧版 AI 后端集中于 `server/legacy/`。`npm start` 保留兼容行为，`npm run start:team` 独立启动新版并关闭 `/legacy.html` 和旧接口。
+- 数据库迁移入口为 `database/migrations.js`。`migrateTeam` 处理新版账号、状态、回访及企微/客服表；完整 `migrate` 还处理旧版表。保持无损、可重复的迁移行为，勿将演示来源导入重新放入独立账号版启动流程。阅读顺序和退役边界见 `docs/architecture.md`。
 - 微信分享版由 `npm run build:share` 生成。改动共享规则或分享版界面时，先改源码，再重新生成并核对。分享版使用模拟数据与浏览器存储，账号版通过服务端持久化。
 
 ## 业务约定
@@ -20,6 +21,8 @@
 
 ## 迁移和验证
 
-- 按 README 的阶段执行。先备份并核对 GitHub 与本地差异，从保留本地改动的版本建立部署分支。Neon 迁移和 Render 首轮试用覆盖新版账号工作台，旧版 AI 审核仍可在本地运行。
+- 按 README 的阶段执行。先备份并核对 GitHub 与本地差异，从保留本地改动的版本建立部署分支。新旧版运行时均以 PostgreSQL 为目标；SQL Server 仅供一次性来源搬迁。实际服务切换与 Neon / Render 部署须以最新验收结果为准。
 - 数据库变更用独立测试库验证。迁移应可重复执行，检查权限、并发写入、重启持久化和备份恢复。把 `.env`、数据库连接串、备份和真实顾客资料留在各自受控的环境中，提交中使用配置示例和模拟数据。
 - 业务规则或账号版接口有改动时运行 `npm run check` 和 `npm run test:team`。涉及旧版接口或共用规则时运行 `npm test`，按改动范围补跑 `npm run test:legacy`。涉及分派、反馈或权限的界面改动，验证老板娘和员工的实际操作路径。
+
+- PostgreSQL 与企业微信入口见 `docs/postgresql-wecom.md`。涉及发送、绑定或客服权限时运行 `npm run test:integrations`。真实消息只能通过明确配置的平台凭据发送，模拟会员不得发送真实消息；分享版不调用企微接口。

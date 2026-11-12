@@ -1,5 +1,54 @@
 # MoneyAI 部署交接
 
+## 2026-11-12 话术入口、企微接入与真实会员导入（最新界面与服务）
+
+- 根据用户截图，将员工话术页的企微发送、发送记录和客服入口移到顾客预览下方，删除该页的复制、图文卡片下载、带回任务按钮及对应无用处理函数。任务详情中的复制入口保留。发送主按钮为「通过企业微信发送」，未配置时显示「尚未配置，前往接入设置」。员工点击未配置入口只查看管理员接入指引，不能填写或读取密钥。
+- 管理员从「员工账号管理 → 企微接入设置」填写企业 ID、客户联系应用密钥，可选微信客服和回调设置。保存后立即应用到客户端代理，不需要再次重启。数据库存储 AES-256-GCM 密文，GET 不回显密钥，平台错误提示会遮盖凭据；本机加密密钥位于 `%LOCALAPPDATA%/NailMate/private/wecom-settings.key`，实际验证其权限仅允许当前用户和 SYSTEM，并在隔离库验证默认文件密钥加密、重载解密。备份数据库时必须同时保全该密钥；云端使用稳定的 WECOM_SETTINGS_KEY。
+- 检测会实际获取访问凭据、读取客户联系员工、查询群发记录，并在选定员工后检测其客户列表权限；显示逐项结果、错误码及失败原因。只读权限检查不冒充实际发送成功。真实测试向导按「检测 → 绑定员工和真实会员 → 预览 → 确认一次真实测试 → 员工企微确认 → 查询结果」操作，沿用授权、冷却、任务归属和模拟会员禁发规则；保留管理员发起人和负责员工。
+- 「会员档案 → 导入真实会员」支持 Excel .xlsx 与 UTF-8/GB18030 CSV，提供实际可下载的两种模板。第一版只导入会员档案：姓名与手机号必填，可匹配等级、余额、消费、偏好、日期、授权及备注。每批最多 500 行、50 列、5 MB；先映射预览、修正错误、勾选核对后确认。整批事务写入，重复提交不重复新增，重复手机号不覆盖旧会员，未提供授权时默认未授权。导入记录标为真实，不虚构服务订单。
+- 依赖增加 ExcelJS 4.4.0 和 csv-parse 7.0.3；ExcelJS 的 uuid 固定覆盖为兼容其 v4 调用的 11.1.1，已验证 XLSX 读写，npm audit 为 0 个已知漏洞。管理员接入和导入测试加入 test:integrations。
+- 隔离 PostgreSQL 17 回归：账号 16 项、核心业务 32 项、旧入口 2 项、集成 8 项，共 58 项通过；语法与差异检查通过。Chrome 实测设置保存/不回显/权限检测、完整测试向导（受控接口）、模板下载和 Excel 导入保存；员工未配置提示、草稿编辑、按钮位置、发送草稿衔接、390px 布局无横向溢出、页面无脚本错误。分享版已重建。
+- 正式更新前备份源码、数据、配置、数据库和服务器加密密钥，受控备份根目录为 `C:\Users\12505\AppData\Local\NailMate\backups\admin-import-20261112212317`。停止核实的旧 PID 18056 后进行增量迁移：原 22 张表的全部旧字段、行数和内容 SHA-256 保持一致，新增设置与导入表，目标共 24 张表；发送批次增加管理员发起人字段。迁移后的 PostgreSQL 备份已恢复至独立库，24 张表内容全部核对一致，没有重置或导入测试数据到日常库；独立验收集群已停止。
+- 当前隐藏服务 PID 为 41796，监听 `127.0.0.1:3000`。首页依赖的新脚本返回 200，会话接口返回 200 且 setupRequired=false，未登录访问接入设置及模板接口返回 401，启动日志无错误。服务已重启，现有浏览器需重新登录。管理员尚需填入自己的真实企微凭据并完成真实联调；本轮没有替门店发送真实客户消息。
+- 验收报告为 `codex-artifacts/reports/admin-import-rollout-20261112.json` 和 `admin-import-ui-20261112.json`，日志位于 `codex-artifacts/logs/admin-import-20261112/`，截图及辅助脚本在 `codex-artifacts/tmp/admin-import-ui/` 等。维护与操作入口为 `docs/postgresql-wecom.md`、`docs/member-import.md`。
+
+## 2026-11-12 本机密码重置工具
+
+- 根据用户请求新增根目录 `重置登录密码.bat`，调用 `scripts/reset-password.js`。使用现有 PostgreSQL 配置，显示实际目标和已有工作台账号；默认老板娘，也支持选择已有员工。密码在交互终端中输入两次、不回显、不作为命令行参数，输入 `RESET` 才提交；Ctrl+C 或其他确认输入取消。
+- 复用现有 `saveCredentials()` 的校验及 scrypt，事务内复核账号是否仍存在及盐值是否改变，只更新所选账号的凭据，不创建账号或修改业务记录。旧会话按现有盐值校验机制失效，不需要重启网站。没有新增公开重置接口，没有修改现有认证模块或日常 `.env`。
+- `scripts/reset-password.test.js` 的数据库部分必须显式设置独立 `RESET_TEST_DATABASE_URL`，不回退到日常库。本轮在单独的 PostgreSQL 17 集群运行新测试 2 项和原账号版 16 项，共 18 项全部通过；覆盖未知账号、取消、密码校验、并发凭据保护、新密码登录、旧密码拒绝、旧会话失效，以及其他账号和业务数据保留。
+- 已在真实交互式终端运行 BAT，仅重置隔离库内 `bat-fixture` 测试账号；确认密码输入无回显、确认提交及 BAT 暂停退出正常。测试集群已停止。没有执行日常老板娘账号的密码重置，也没有停止或重启当前网站。
+- 使用说明在 README「本机重置工作台密码」。验证报告为 `codex-artifacts/reports/password-reset-20261112.json`，日志为 `codex-artifacts/logs/password-reset-tests.log`；辅助验证脚本位于 `codex-artifacts/tmp/test-password-tool.js`。
+
+## 2026-11-12 正式数据库切换（当前运行状态）
+
+- 用户明确要求完成正式切换。本轮核实 `.env` 已配置正式 `DATABASE_URL`，目标为本机 PostgreSQL 17.12 的 `127.0.0.1:5432/nailmate`，运行角色 `nailmate_app`，不是前轮临时测试集群。目标原先为空；原 SQL Server 来源为 `SQLEXPRESS01/NailMate`。
+- 在独立 PostgreSQL 17.12 集群上重新执行全部回归：新版 16 项、核心与旧业务 32 项、旧入口边界 2 项、企微/迁移 6 项，总计 56 项全部通过。正式库的建表权限及结构迁移也通过事务回滚验证，没有用日常库运行这些测试。
+- 切换前备份当前源码、数据文件、受控配置和可运行的 SQL Server 回退源码，备份根目录为 `C:\Users\12505\AppData\Local\NailMate\backups\cutover-20261112-200656`，已限制访问权限。原 `.env` 保留，没有把凭据写入报告。
+- 核实旧 PID `29220` 占用 3000 端口，且实际首页与工作区文件逐字节一致后停止该服务。执行 `node database/transfer-sqlserver.js --apply --source-stopped`，先创建 SQL Server COPY_ONLY / CHECKSUM 备份并执行 RESTORE VERIFYONLY，再正式搬迁。
+- 15 张来源业务表逐表数量及规范化内容 SHA-256 与 PostgreSQL 一致，自增序列已校正，账号盐值和密码哈希保留。目标共 22 张表（含新增企微和客服表）；旧版 2,800 位会员、1 条审核任务、12 份话术草稿、新版 1 条状态、1 个已开通登录账号及 1,080 条回访记录均保留。新版状态中的六名员工档案保留，原先没有开通密码的员工没有擅自开通。
+- 正式库生成 `postgres-before-open.dump`，使用 pg_restore 在独立 PostgreSQL 17.12 实例恢复为 `nailmate_formal_restore`，再次逐表核对全部 15 张业务表内容一致。正式开放前已完成此恢复验证，原 SQL Server 数据未清空或升级。验收用独立 PostgreSQL 集群已停止，正式 Windows 数据库服务保持运行。
+- 新服务由隐藏 Node 进程 PID `18056` 从当前工作区运行 `server/main.js`，监听 `127.0.0.1:3000`；系统连接表确认该进程已建立到 `127.0.0.1:5432` 的连接。首页、脚本、会话接口返回 200，`setupRequired=false`；未登录读取新版、旧版、企微发送和客服接口均返回 401。启动日志无错误，SQL Server 已不再作为此服务的运行时数据库。
+- 原账号密码的哈希和盐值已完成内容一致性核对；未要求用户提供密码，因此没有声称“已实际输入原密码登录成功”。原浏览器会话失效，需要使用原账号重新登录。没有在正式库创建测试账号、分派测试任务或发送真实企微消息。
+- 报告为 `codex-artifacts/reports/formal-cutover-20261112.json`，包含脱敏目标信息、逐表数量/摘要和备份位置。执行与服务日志位于 `codex-artifacts/logs/cutover-20261112/`。SQL Server 备份完整路径见报告，PostgreSQL 备份及受控配置在上述独立备份根目录。
+- 后续日常启动仍使用 `npm start` 或 `启动NailMate.cmd`，PostgreSQL 由既有 Windows 服务 `postgresql-x64-17` 提供。本轮没有配置开机启动 Node，也没有执行 Neon / Render 部署；企微正式联调仍需平台凭据与回调配置。
+- 如需回退，先停写并保全 PostgreSQL 切换后新增记录，再使用受控回退源码与原 SQL Server，禁止直接切回造成新记录丢失。下文“正式切换未执行”的描述属于本轮以前的历史记录。
+
+## 2026-11-12 PostgreSQL 与企业微信代码实施记录
+
+- 本轮在 `E:\FJNU\计算机网络与安全学院软件工程专业\大二\黑客松 MoneyAI\NailMate-GitHub` 实施，保留开始时全部未提交修改；没有提交、推送或执行 Neon / Render 部署。修改前维护源码保存在 `codex-artifacts/tmp/postgres-wecom-before/`，没有复制或改写现用 `.env`。
+- 新旧版运行时代码均改为 `pg` / PostgreSQL。完成参数化查询、jsonb / bytea / 日期类型、事务级 advisory lock、初始化、来源导入与旧版接口适配；`mssql` 与 Windows 驱动仅供一次性来源搬迁工具使用。`DATABASE_URL` 未配置时明确报错，不自动连接或修改旧 SQL Server。
+- 只读核实当前 SQL Server 的 15 张业务表；将其完整搬迁到随机命名的隔离 PostgreSQL 库，逐表数量及规范化内容 SHA-256 一致。重复执行、冲突回滚、pg_dump 备份与 pg_restore 到另一独立库均通过，随后清理本轮随机库。没有对日常来源库执行结构迁移、清空或切换。
+- 本机隔离 PostgreSQL 18.6 使用用户临时目录及 `127.0.0.1:55439`，不属于正式运行目标；因 PostgreSQL 原生程序在当前中文路径下初始化遇到编码错误，测试工具和测试集群放在 `%TEMP%/nailmate-pg-tools-20261112/`。验收后已通过 pg_ctl 停止测试数据库，不得将此临时地址当作部署配置。
+- 企微好友回访新增员工/会员人工绑定、统一或逐人话术、实拍图、逐人预检、任务持久化、幂等防重、平台结果查询和重启恢复。仅真实会员且通过服务端权限与资格校验才能提交；创建平台任务不代表已发送。平台发送事实进入联系冷却，不伪造反馈。离职清理绑定，保留发送历史。
+- 网页微信客服使用独立渠道，支持咨询入口、加密回调、游标同步、会话分配及会员人工关联、文字/图片查看与文字回复。处理 48 小时窗口、5 条回复额度、平台会话状态、失败事件和未知结果，员工只能访问分配给其账号的会话。其他消息类型暂显示类型提示，不支持网页语音/视频播放、文件下载或图片回复。原企微好友聊天没有迁入网页。
+- 企业微信官方页面经浏览器搜索工具读取失败后，通过 HTTPS 直接读取成功，已核对创建群发、结果查询、客服消息及会话状态。平台规则入口见 `docs/postgresql-wecom.md`。
+- 最终执行 `npm run check`，新版 `test:team` 16 项、`npm test` 32 项、`test:legacy` 2 项、`test:integrations` 6 项均通过。真实 `server/main.js` 在隔离库启动，通过会话接口和未登录访问保护检查；未调用真实 AI 或真实企微接口。
+- Chrome 无头实测老板娘设置账号、员工登录、绑定候选读取、统一与逐人草稿预览、提交及持久化，1440px / 390px 页面无脚本错误，移动端弹窗无横向溢出。分享版已重建，并从 file:// 验证企微发送和客服入口不请求 API。
+- 辅助证据：`codex-artifacts/reports/postgres-transfer-20261112.json` 与 `postgres-wecom-ui-20261112.json`；测试日志和截图在 `codex-artifacts/tmp/`。含完整搬迁数据的 PostgreSQL 备份放在用户临时目录中，未放入 Git；报告只保留数量和内容摘要。
+- 验收结束时，自动审批拦截了停止临时助手并清理重复下载文件的组合命令，仅返回 `blocked by policy`，该组合命令没有执行；随后通过单独的 pg_ctl 命令成功停止本轮测试 PostgreSQL。临时下载材料和验证证据保留，没有尝试更改审批设置。
+- **正式切换与真实联调未执行**：当前 `.env` 尚无已确认的正式 PostgreSQL 目标及门店企微凭据，未停止或重启日常 3000 服务。现用内存后端仍需按切换指南迁移数据后重启；不可直接把本轮临时测试集群用于日常业务。管理员需配置接口权限、可信 IP、测试员工/会员与 HTTPS 客服回调，再分别验收群发确认和网页客服收发。
+
 最后核验时间为 2026-11-12（北京时间）。第二阶段的代码、隔离验收和恢复演练已完成。项目也称 NailMate AI，为美甲店提供老板娘和员工账号、顾客联系分派、反馈、备注、预约、今日待办及护理回访。目标是保留可独立运行的本地版，将新版账号工作台迁到 Neon PostgreSQL，通过 GitHub 和 Render Web Service 小范围试用。旧版 AI 审核工作台留在本地。真实收银接入等商家确认系统和订单导出能力后再安排。
 
 ## 长期执行规则
@@ -189,6 +238,19 @@ GitHub API 实查的远端为 `https://github.com/kevinlvmercuria-bot/MoneyAI.gi
 - 在临时全新检出中，`npm ci --prefer-offline`、首次与重复 `data:prepare`、`build:share`、语法检查通过。生成的分享文件仅留在本地。现用新版通过隐藏 Node 进程运行于 `127.0.0.1:3000`；首页、脚本、会话接口返回 200，未登录的账号版请求返回 401。现用库尚无老板娘凭据，首次账号由使用者自行设置，测试凭据仅用于已清理的独立库。
 - 本机辅助证据在 `codex-artifacts/reports/integration-20261112.json`；日志在 `codex-artifacts/logs/`，配置及 SQLite 备份、全新检出与临时验证脚本在 `codex-artifacts/tmp/integration-20261112/`。这些本机材料未提交，报告通过本地 Git exclude 单独排除。
 
+### 2026-11-12 商业化前的结构整理
+
+- 本轮维护目录为 `E:\FJNU\计算机网络与安全学院软件工程专业\大二\黑客松 MoneyAI\NailMate-GitHub`，修改前 Git 基线为 `9087736`。执行时外层 `NailMate` 旧副本已不在现场，本轮没有移动或删除它，不能声称完成该副本的差异核验。
+- 早期原型的 `members.js`、`config.js`、浏览器 `app.js`、原型测试，以及旧 `wg_member` 初始化成组退役。原型 `server/app.js` 被正式 HTTP 应用装配模块替代。历史从上述 Git 基线恢复；本地源码快照在 `codex-artifacts/tmp/structure-20261112/before/`。
+- 新版前端拆为 `public/app/pages/` 七个业务页面和 `app/` 内的状态、请求、身份、交互及任务操作模块。`public/team-workspace.js` 从约 1,850 行缩至 577 行，保留导航、刷新和模块协调。页面通过共享上下文访问当前状态，避免刷新后缓存旧对象。
+- 纯业务规则移至 `public/shared/team-rules.js`，分享版存储适配在 `team-persistence.js`，`public/team-store.js` 保留业务操作和旧 `options.storage` 兼容。存储键、payload、权限、日期口径和业务规则保持。分享构建直接读取 `index.html` 的脚本顺序，已重建单文件并验证。
+- `server/main.js` 仅保留启动及资源关闭，`server/app.js` 装配 HTTP；有效旧版 AI 后端集中到 `server/legacy/`。新版 SQL 读写在 `server/team-repository.js`，保留原有事务和防重行为。`npm start` 默认保持新旧兼容，`npm run start:team` 关闭旧页面与旧 API。
+- `database/migrations.js` 区分完整迁移和 `migrateTeam`。`npm run db:init:team` 只创建/升级 `TeamCredentials`、`TeamDemoState`、`TeamCareReminders`，不导入 SQLite、演示会员或任务。已有列和状态格式不变。当前账号版仍需 `data/team-data.json`；独立数据包、业务表拆分、Neon 与多门店模型未在本轮实施。
+- 实际执行 `npm run check`、`npm test` 32 项、`npm run test:team` 16 项、`npm run test:legacy` 2 项，全部通过。保留旧版的真实 AI/审核链路由原有 SQL 回归覆盖；新增边界测试验证独立账号版不挂载旧接口，以及只建新版三张表即可登录和读取工作台。
+- Chrome 在随机独立 SQL 库验证老板娘首次设置账号、六页导航、档案编辑与刷新、新增员工与分派；390px 员工登录、话术、反馈与刷新；老板娘报表与应用重建后持久化。分享版从 `file://` 验证分派、身份切换、员工反馈、刷新恢复和退出，无 HTTP 资源请求、无浏览器脚本错误。独立库已清理。没有调用真实模型或发送客户消息。
+- 页面证据与临时脚本在 `codex-artifacts/tmp/structure-20261112/`，机器可读浏览器结果在 `codex-artifacts/reports/structure-ui-20261112.json`，人工维护入口为 `docs/architecture.md`；README 和 AGENTS 已同步。
+- **运行切换未完成**：自动审批检查拒绝了停止当前 Node 进程并隐藏启动新进程的操作，仅返回 `blocked by policy`。该命令未执行；本轮没有重启现用 3000 服务，也没有对现用库执行结构迁移。当前内存中的后端仍是整理前版本，需要使用者手动停止旧服务，再在当前目录执行 `npm start` 或双击 `启动NailMate.cmd`，重启后重新登录。GitHub、Neon 和 Render 均未在本轮更新。
+
 ## 下一轮从这里继续
 
-当前优先完善本地网站功能。手工建档、美甲完成登记、护理回访冷却和误派撤回已通过本地验收。收到恢复部署的指示后，从第三阶段继续，准备独立 Neon 试用库并核对迁移范围，重点包括手工档案及服务记录、`TeamCareReminders` 的唯一键、事务与访问控制。
+本机正式 PostgreSQL 切换已完成。后续按 `docs/postgresql-wecom.md` 由管理员提供受控企微配置、测试员工和会员，验收群发确认与网页客服回调；云端部署仍需另行安排。早期阶段表保留作历史记录。

@@ -1,5 +1,7 @@
 # NailMate AI
 
+> 本文保留 v4.0 历史使用说明。当前源码的新旧版已统一使用 PostgreSQL；请以根目录 README 和 [PostgreSQL 与企微指南](postgresql-wecom.md) 的启动、搬迁步骤为准。下文 SQL Server 配置仅供历史追溯。
+
 美甲店会员关系经营演示，包含 2,800 位虚拟会员。以「关系经营版」UI 为主：八类经营机会 → 沟通工作台 → 人工审核 → 选择模拟结果 → 查看复购结果。真实 AI 只用于准备文案，不发送消息、不自动预约。
 
 当前版本为 v4.0（4.0.0），关系经营版 UI 与现有功能已适配，经用户测试确认后发布。
@@ -69,7 +71,7 @@ npm run db:import
 
 | 位置 | 职责 |
 | --- | --- |
-| `public/index.html`、`workspace.js` | 画面骨架、初始化、导航与事件协调 |
+| `public/legacy.html`、`workspace-legacy.js` | 旧版画面骨架、初始化、导航与事件协调 |
 | `public/pages/` | 六页渲染，`care.js` 提供折叠反馈与历史组件 |
 | `public/state.js`、`api.js`、`components.js` | 单一共享状态、请求工具、公共展示 |
 | `public/communication.js`、`communication-client.js` | 性格到沟通语气的共享规则与浏览器桥接 |
@@ -77,14 +79,14 @@ npm run db:import
 | `public/download-card.js`、`product-images.js` | 图文导出及附件图片映射 |
 | `public/rules.js`、`rules-client.js` | 前后端共用规则与浏览器兼容桥接 |
 | `public/styles/base.css`、`workspace.css` | 附件主视觉与 API 组件适配 |
-| `server/main.js`、`store.js`、`db.js` | 路由、事务、SQL 连接和持久化 |
-| `server/ai-copy.js`、`copy-context.js`、`copy-routes.js` | 模型调用、沟通上下文验证、文案和图片接口 |
-| `server/relationship-routes.js` | 会员备注、手写草稿、文案提交审核 |
+| `server/legacy/review-routes.js`、`store.js`，`server/db.js` | 旧版审核路由、持久化，以及共用 SQL 连接和事务 |
+| `server/legacy/ai-copy.js`、`copy-context.js`、`copy-routes.js` | 模型调用、沟通上下文验证、文案和图片接口 |
+| `server/legacy/relationship-routes.js` | 会员备注、手写草稿、文案提交审核 |
 | `database/schema.sql`、`setup.js`、`import-source.js` | 可重复建表迁移、演示初始化、SQLite 来源导入 |
 | `database/personality-notes.js` | 为已有模拟性格追加沟通备注，保留旧记录并支持重复执行 |
 | [docs/api.md](docs/api.md) | 联调字段、状态和示例 |
 
-旧 `server/app.js`、`members.js`、`config.js` 与 `public/app.js` 仍用于历史兼容测试。`database/init.js` 和 `001-schema.sql` 是旧 `wg_member` 流程；正式启动和初始化不走它们。
+早期原型的 `members.js`、`config.js`、`public/app.js`、原型测试以及 `wg_member` 初始化已退役，可从 Git 基线 `9087736` 找回。`server/app.js` 现为正式 HTTP 装配模块，不再是原型。此处的旧版 AI 工作台仍受支持：使用 `npm start` 启动，老板娘登录后访问 `/legacy.html`；独立账号模式不启用此入口。
 
 ## 验证
 

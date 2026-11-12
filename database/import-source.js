@@ -4,7 +4,7 @@ const { readFileSync } = require('node:fs');
 const path = require('node:path');
 const { createHash } = require('node:crypto');
 const { DatabaseSync } = require('node:sqlite');
-const { sql, connect, transaction } = require('../server/db');
+const { connect, transaction } = require('../server/db');
 const { DEMO_DATE } = require('../public/rules');
 
 const SOURCE_PATH = path.join(__dirname, '..', 'data', 'nailmate.db');
@@ -75,42 +75,20 @@ async function importSource(pool, file = SOURCE_PATH) {
     const source = readSource(file);
     const counts = Object.fromEntries(TABLES.map((table) => [table, source.rows[table].length]));
     return transaction(pool, async (tx) => {
-        const previous = await tx.request().input('hash', sql.Char(64), source.sourceHash)
-            .query('SELECT source_hash FROM dbo.ImportRuns WHERE source_hash = @hash');
-        if (previous.recordset.length) return { imported: false, counts, sourceHash: source.sourceHash };
+        const previous = await tx.query('SELECT source_hash FROM ImportRuns WHERE source_hash = $1', [source.sourceHash]);
+        if (previous.rows.length) return { imported: false, counts, sourceHash: source.sourceHash };
 
-        await tx.request().input('hash', sql.Char(64), source.sourceHash).query(`
-            INSERT dbo.MemberProfileBackups (source_hash, member_id, profile)
-                SELECT @hash, id, profile FROM dbo.Members;
-            DELETE FROM dbo.MemberImportStage;
-        `);
-        const members = new sql.Table('dbo.MemberImportStage');
-        members.columns.add('id', sql.VarChar(5), { nullable: false });
-        members.columns.add('profile', sql.NVarChar(sql.MAX), { nullable: false });
-        for (const member of mapMembers(source.rows)) members.rows.add(member.id, JSON.stringify(member));
-        await tx.request().bulk(members);
-        await tx.request().query(`
-            UPDATE m SET profile = i.profile FROM dbo.Members m JOIN dbo.MemberImportStage i ON i.id = m.id;
-            INSERT dbo.Members (id, profile) SELECT id, profile FROM dbo.MemberImportStage i WHERE NOT EXISTS (SELECT 1 FROM dbo.Members m WHERE m.id = i.id);
-            DELETE FROM dbo.MemberImportStage;
-            DELETE FROM dbo.Products;
-            DELETE FROM dbo.SourceRecords;
-        `);
-        const products = new sql.Table('dbo.Products');
-        products.columns.add('id', sql.VarChar(40), { nullable: false });
-        products.columns.add('profile', sql.NVarChar(sql.MAX), { nullable: false });
-        for (const product of mapProducts(source.rows)) products.rows.add(product.id, JSON.stringify(product));
-        await tx.request().bulk(products);
 
-        const records = new sql.Table('dbo.SourceRecords');
-        records.columns.add('source_table', sql.VarChar(40), { nullable: false });
-        records.columns.add('source_id', sql.NVarChar(100), { nullable: false });
-        records.columns.add('member_id', sql.VarChar(5), { nullable: true });
-        records.columns.add('payload', sql.NVarChar(sql.MAX), { nullable: false });
-        for (const record of source.sourceRecords) records.rows.add(...record);
-        await tx.request().bulk(records);
-        await tx.request().input('hash', sql.Char(64), source.sourceHash).input('counts', sql.NVarChar(sql.MAX), JSON.stringify(counts))
-            .query('INSERT dbo.ImportRuns (source_hash, counts_json) VALUES (@hash, @counts)');
+        await tx.query('INSERT INTO MemberProfileBackups(source_hash,member_id,profile) SELECT $1,id,profile FROM Members',[source.sourceHash]);
+        await tx.query(`INSERT INTO Members SELECT id,profile FROM jsonb_to_recordset($1::jsonb) AS r(id text,profile jsonb)
+            ON CONFLICT(id) DO UPDATE SET profile=excluded.profile`,[JSON.stringify(mapMembers(source.rows).map(m=>({id:m.id,profile:m})))]);
+        await tx.query('DELETE FROM MemberImportStage; DELETE FROM Products; DELETE FROM SourceRecords');
+        await tx.query('INSERT INTO Products SELECT id,profile FROM jsonb_to_recordset($1::jsonb) AS r(id text,profile jsonb)',
+            [JSON.stringify(mapProducts(source.rows).map(p=>({id:p.id,profile:p})))]);
+        await tx.query(`INSERT INTO SourceRecords SELECT source_table,source_id,member_id,payload
+            FROM jsonb_to_recordset($1::jsonb) AS r(source_table text,source_id text,member_id text,payload jsonb)`,
+            [JSON.stringify(source.sourceRecords.map(([source_table,source_id,member_id,payload])=>({source_table,source_id:String(source_id),member_id,payload:JSON.parse(payload)})))]);
+        await tx.query('INSERT INTO ImportRuns(source_hash,counts_json) VALUES($1,$2)',[source.sourceHash,JSON.stringify(counts)]);
         return { imported: true, counts, sourceHash: source.sourceHash };
     });
 }
@@ -121,7 +99,7 @@ async function run() {
         await require('./setup').initialize(pool);
         console.log(await importSource(pool));
     } finally {
-        await pool.close();
+        await pool.end();
     }
 }
 if (require.main === module) run().catch((error) => { console.error('来源数据导入失败：', error.message); process.exitCode = 1; });

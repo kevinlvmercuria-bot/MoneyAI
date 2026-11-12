@@ -1,30 +1,21 @@
 'use strict';
 
-const { readFileSync } = require('node:fs');
-const path = require('node:path');
-const { sql, connect, transaction } = require('../server/db');
-const { seedTask } = require('../server/store');
+const { connect, transaction } = require('../server/db');
+const { seedTask } = require('../server/legacy/store');
 const { members, demoMember } = require('./demo-data');
 
-async function migrate(tx) {
-    await tx.request().batch(readFileSync(path.join(__dirname, 'schema.sql'), 'utf8'));
-    await require('../server/team-auth').initializeTeamAuth(tx);
-    await require('../server/team-reminders').initializeTeamCareReminders(tx);
-}
+const { migrate } = require('./migrations');
 
 async function initialize(pool) {
     await transaction(pool, async (tx) => {
         await migrate(tx);
-        const { recordset } = await tx.request().query('SELECT COUNT(*) AS total FROM dbo.Members');
-        if (recordset[0].total) {
+        const { rows } = await tx.query('SELECT COUNT(*)::int AS total FROM Members');
+        if (rows[0].total) {
             console.log('演示会员已存在，跳过初始化数据。');
             return;
         }
-        const table = new sql.Table('dbo.Members');
-        table.columns.add('id', sql.VarChar(5), { nullable: false });
-        table.columns.add('profile', sql.NVarChar(sql.MAX), { nullable: false });
-        for (const member of members) table.rows.add(member.id, JSON.stringify(member));
-        await tx.request().bulk(table);
+        await tx.query('INSERT INTO Members SELECT id,profile FROM jsonb_to_recordset($1::jsonb) AS r(id text,profile jsonb)',
+            [JSON.stringify(members.map(member=>({id:member.id,profile:member})))]);
         await seedTask(tx, demoMember);
         console.log(`已初始化 ${members.length} 位虚拟会员和 1 条待审核任务。`);
     });
@@ -37,7 +28,7 @@ async function setup() {
         const result = await require('./import-source').importSource(pool);
         console.log(result.imported ? '来源数据库已导入。' : '来源数据库未变化，跳过导入。');
     } finally {
-        await pool.close();
+        await pool.end();
     }
 }
 

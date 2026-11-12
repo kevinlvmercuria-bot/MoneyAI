@@ -1,8 +1,8 @@
 {
   "name": "nailmate",
-  "version": "4.1.0",
+  "version": "5.0.0",
   "private": true,
-  "description": "NailMate Express API and SQL Server integration scaffold",
+  "description": "NailMate PostgreSQL workspace and WeCom customer communication",
   "engines": {
     "node": ">=22.13.0"
   },
@@ -14,18 +14,31 @@
     "db:init": "node database/setup.js",
     "test": "node --test server/workflow.test.js server/relationship.test.js server/communication.test.js database/personality-notes.test.js",
     "check": "node scripts/check.js",
-    "test:legacy": "node --test server/app.test.js",
+    "test:legacy": "node --test server/legacy.test.js",
     "db:import": "node database/import-source.js",
     "db:personality-notes": "node database/personality-notes.js",
     "build:share": "node scripts/build-share.js",
-    "test:team": "node --test server/team.test.js"
+    "test:team": "node --test server/team.test.js",
+    "start:team": "node scripts/start-team.js",
+    "db:init:team": "node database/migrate.js --team-only",
+    "db:transfer:inspect": "node database/transfer-sqlserver.js",
+    "db:transfer": "node database/transfer-sqlserver.js --apply",
+    "test:integrations": "node --test server/integrations.test.js database/transfer.test.js server/admin-import.test.js"
   },
   "dependencies": {
+    "csv-parse": "7.0.3",
     "dotenv": "18.0.9",
+    "exceljs": "4.4.0",
     "express": "5.3.0",
-    "mssql": "12.7.14"
+    "pg": "8.23.1"
   },
   "optionalDependencies": {
-    "msnodesqlv8": "^5.0.0"
+    "msnodesqlv8": "^5.0.0",
+    "mssql": "12.7.14"
+  },
+  "overrides": {
+    "exceljs": {
+      "uuid": "11.1.1"
+    }
   }
 }

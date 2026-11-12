@@ -2,7 +2,7 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const { PERSONALITY_STYLES, resolveCommunication, isCopyStyle } = require('../public/communication');
-const ai = require('./ai-copy');
+const ai = require('./legacy/ai-copy');
 
 test('四类性格自动匹配，缺失和未知标签回退自然亲切', () => {
     for (const style of PERSONALITY_STYLES) {

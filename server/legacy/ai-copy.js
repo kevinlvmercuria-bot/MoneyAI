@@ -1,8 +1,8 @@
 'use strict';
 
 const { resolveContext, generationCatalog } = require('./copy-context');
-const { DEMO_DATE, OBJECTIVES, noProductObjective } = require('../public/rules');
-const { PERSONALITY_STYLES, DEFAULT_STYLE, isCopyStyle, resolveCommunication } = require('../public/communication');
+const { DEMO_DATE, OBJECTIVES, noProductObjective } = require('../../public/rules');
+const { PERSONALITY_STYLES, DEFAULT_STYLE, isCopyStyle, resolveCommunication } = require('../../public/communication');
 
 // 模型顺序即默认优先级。首位为默认模型（当 .env 未显式设置 AI_MODEL 时生效）。
 // 排序依据：实测该网关对不同模型的"思考模式"行为差异巨大，而 thinking token 不受 max_tokens 约束、

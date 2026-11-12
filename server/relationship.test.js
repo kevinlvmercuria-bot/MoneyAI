@@ -3,7 +3,7 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const { randomBytes } = require('node:crypto');
 const { connect, transaction, sql } = require('./db');
-const store = require('./store');
+const store = require('./legacy/store');
 const { createApp } = require('./main');
 const { authenticate } = require('./test-auth-client');
 const { initialize } = require('../database/setup');
@@ -13,14 +13,14 @@ const { resolveCommunication } = require('../public/communication');
 
 test('关系经营版 API 与持久化验收', { timeout: 90000 }, async (t) => {
     const name = 'NailMate_Relationship_' + randomBytes(8).toString('hex'),
-        master = await connect('master');
+        master = await connect('postgres');
     let pool,
         server,
         created = false,
         calls = 0;
     const generationStyles = [];
     try {
-        await master.request().query(`CREATE DATABASE [${name}]`);
+        await master.query(`CREATE DATABASE "${name}"`);
         created = true;
         pool = await connect(name);
         await initialize(pool);
@@ -130,11 +130,7 @@ test('关系经营版 API 与持久化验收', { timeout: 90000 }, async (t) => 
             );
             await transaction(pool, (tx) =>
                 tx
-                    .request()
-                    .input('id', sql.VarChar(5), previewMember.id)
-                    .query(
-                        "UPDATE dbo.Members SET profile=JSON_MODIFY(profile,'$.lifecycle','dormant') WHERE id=@id",
-                    ),
+                    .query("UPDATE Members SET profile=jsonb_set(profile,'{lifecycle}',to_jsonb('dormant'::text)) WHERE id=$1", [previewMember.id]),
             );
             assert.equal(
                 (await post('/tasks/' + taskId + '/execute', { scenario: 'booking' })).status,
@@ -142,11 +138,7 @@ test('关系经营版 API 与持久化验收', { timeout: 90000 }, async (t) => 
             );
             await transaction(pool, (tx) =>
                 tx
-                    .request()
-                    .input('id', sql.VarChar(5), previewMember.id)
-                    .query(
-                        "UPDATE dbo.Members SET profile=JSON_MODIFY(profile,'$.lifecycle','active') WHERE id=@id",
-                    ),
+                    .query("UPDATE Members SET profile=jsonb_set(profile,'{lifecycle}',to_jsonb('active'::text)) WHERE id=$1", [previewMember.id]),
             );
             assert.equal(
                 (await post('/tasks/' + taskId + '/execute', { scenario: 'booking' })).status,
@@ -213,11 +205,7 @@ test('关系经营版 API 与持久化验收', { timeout: 90000 }, async (t) => 
                 const id = await store.insertTask(tx, rules.buildReviewTask(member, null));
                 await store.updateTask(tx, id, 'executed_simulated', '旧演示任务', 'reply');
                 await tx
-                    .request()
-                    .input('task', sql.Int, Number(id.slice(1)))
-                    .query(
-                        "UPDATE dbo.Tasks SET context_json=JSON_MODIFY(context_json,'$.executedOn','2026-10-01') WHERE id=@task",
-                    );
+                    .query("UPDATE Tasks SET context_json=jsonb_set(context_json,'{executedOn}',to_jsonb('2026-10-01'::text)) WHERE id=$1", [Number(id.slice(1))]);
                 await store.insertCareRecord(tx, {
                     memberId: member.id,
                     outcome: '暂不联系',
@@ -372,29 +360,23 @@ test('关系经营版 API 与持久化验收', { timeout: 90000 }, async (t) => 
                 pool,
                 (tx) =>
                     tx
-                        .request()
-                        .query(
-                            "SELECT COUNT(*) AS count FROM dbo.SourceRecords WHERE source_table='member_notes'",
-                        ),
+                        .query("SELECT COUNT(*) AS count FROM SourceRecords WHERE source_table='member_notes'"),
                 'Shared',
             );
-            assert.ok(source.recordset[0].count > 0);
+            assert.ok(source.rows[0].count > 0);
         });
     } finally {
         if (server) {
             server.closeAllConnections();
             await new Promise((resolve) => server.close(resolve));
         }
-        await pool?.close();
+        await pool?.end();
         try {
             if (created)
                 await master
-                    .request()
-                    .query(
-                        `ALTER DATABASE [${name}] SET SINGLE_USER WITH ROLLBACK IMMEDIATE; DROP DATABASE [${name}]`,
-                    );
+                    .query(`DROP DATABASE "${name}" WITH (FORCE)`);
         } finally {
-            await master.close();
+            await master.end();
         }
     }
 });

@@ -1,8 +1,8 @@
 'use strict';
 const { randomUUID } = require('node:crypto');
-const { sql, transaction } = require('./db');
+const { transaction } = require('../db');
 const store = require('./store');
-const { canContactFor, buildOpportunityTask } = require('../public/rules');
+const { canContactFor, buildOpportunityTask } = require('../../public/rules');
 const { resolveContext, generationCatalog } = require('./copy-context');
 function check(condition, message, status = 400) {
     if (!condition) throw Object.assign(new Error(message), { apiStatus: status });
@@ -41,17 +41,12 @@ function registerRelationshipRoutes(app, pool) {
             );
             const id = noteId || 'LOCAL-' + randomUUID();
             await tx
-                .request()
-                .input('id', sql.NVarChar(100), id)
-                .input('member', sql.VarChar(5), req.params.id)
-                .input('type', sql.VarChar(20), type)
-                .input('text', sql.NVarChar(1200), text.trim())
-                .input('pinned', sql.Bit, pinned)
-                .input('author', sql.NVarChar(80), author.trim()).query(`
-                IF EXISTS(SELECT 1 FROM dbo.MemberNoteEdits WHERE note_id=@id)
-                    UPDATE dbo.MemberNoteEdits SET note_type=@type,note_text=@text,is_pinned=@pinned,author_name=@author,updated_at=SYSUTCDATETIME() WHERE note_id=@id AND member_id=@member;
-                ELSE INSERT dbo.MemberNoteEdits(note_id,member_id,note_type,note_text,is_pinned,author_name) VALUES(@id,@member,@type,@text,@pinned,@author);
-            `);
+                .query(`
+                INSERT INTO MemberNoteEdits(note_id,member_id,note_type,note_text,is_pinned,author_name) VALUES($1,$2,$3,$4,$5,$6)
+                ON CONFLICT(note_id) DO UPDATE SET note_type=excluded.note_type,note_text=excluded.note_text,
+                    is_pinned=excluded.is_pinned,author_name=excluded.author_name,updated_at=CURRENT_TIMESTAMP
+                WHERE MemberNoteEdits.member_id=excluded.member_id;
+            `, [id, req.params.id, type, text.trim(), pinned, author.trim()]);
             await store.log(tx, 'save_member_note', `${req.params.id} · 保存会员备注`);
             return {
                 state: await store.state(tx),
@@ -79,20 +74,8 @@ function registerRelationshipRoutes(app, pool) {
             check(resolved, '请选择沟通目的');
             const task = buildOpportunityTask(member, resolved.objective, current.products);
             const result = await tx
-                .request()
-                .input('member', sql.VarChar(5), memberId)
-                .input('message', sql.NVarChar(1000), message.trim())
-                .input('reason', sql.NVarChar(500), task.reason)
-                .input(
-                    'ids',
-                    sql.NVarChar(sql.MAX),
-                    JSON.stringify(resolved.productId ? [resolved.productId] : []),
-                )
-                .input('context', sql.NVarChar(sql.MAX), JSON.stringify(resolved))
-                .query(
-                    `INSERT dbo.CopyDrafts(member_id,model,message,original_message,reason,product_ids,context_json) OUTPUT INSERTED.id VALUES(@member,N'店主手写',@message,@message,@reason,@ids,@context)`,
-                );
-            return { draftId: result.recordset[0].id, state: await store.state(tx) };
+                .query(`INSERT INTO CopyDrafts(member_id,model,message,original_message,reason,product_ids,context_json) VALUES($1,'店主手写',$2,$2,$3,$4,$5) RETURNING id`, [memberId, message.trim(), task.reason, JSON.stringify(resolved.productId ? [resolved.productId] : []), JSON.stringify(resolved)]);
+            return { draftId: result.rows[0].id, state: await store.state(tx) };
         });
         res.json(response);
     });
@@ -101,12 +84,10 @@ function registerRelationshipRoutes(app, pool) {
         check(Number.isSafeInteger(id) && id > 0 && id <= 2147483647, '文案编号无效');
         const response = await transaction(pool, async (tx) => {
             const current = await store.state(tx);
-            const { recordset } = await tx
-                .request()
-                .input('id', sql.Int, id)
-                .query('SELECT * FROM dbo.CopyDrafts WHERE id=@id');
-            check(recordset.length, '文案不存在', 404);
-            const draft = recordset[0];
+            const { rows } = await tx
+                .query('SELECT * FROM CopyDrafts WHERE id=$1', [id]);
+            check(rows.length, '文案不存在', 404);
+            const draft = rows[0];
             check(
                 req.body.message === undefined || req.body.message === draft.message,
                 '文案已被其他操作修改，请重新核对',

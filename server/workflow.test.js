@@ -8,21 +8,21 @@ const { createApp } = require('./main');
 const { authenticate } = require('./test-auth-client');
 const { initialize } = require('../database/setup');
 const { importSource, readSource, mapMembers } = require('../database/import-source');
-const aiCopy = require('./ai-copy');
+const aiCopy = require('./legacy/ai-copy');
 const { resolveCommunication } = require('../public/communication');
-const store = require('./store');
+const store = require('./legacy/store');
 const { goalCandidates, SCENARIOS, DEMO_SERVICE_PRICE, CARE_OUTCOMES, canContact, productFor } = require('../public/rules');
 const { OPPORTUNITIES, opportunityCandidates, matchesOpportunity } = require('../public/rules');
 
-test('SQL Server 最小业务闭环验收', { timeout: 90000 }, async (t) => {
+test('PostgreSQL 最小业务闭环验收', { timeout: 90000 }, async (t) => {
     // 仅创建和清理本次随机命名的测试库，避免重置日常演示库。
     const database = 'NailMate_Acceptance_' + randomBytes(8).toString('hex');
-    const master = await connect('master');
+    const master = await connect('postgres');
     let pool;
     let server;
     let created = false;
     try {
-        await master.request().query(`CREATE DATABASE [${database}]`);
+        await master.query(`CREATE DATABASE "${database}"`);
         created = true;
         pool = await connect(database);
         await initialize(pool);
@@ -146,7 +146,7 @@ test('SQL Server 最小业务闭环验收', { timeout: 90000 }, async (t) => {
                 assert.deepEqual(actual.tasks, expected.tasks);
                 assert.deepEqual(actual.logs, expected.logs);
             } finally {
-                await otherPool.close();
+                await otherPool.end();
             }
         });
 
@@ -194,7 +194,7 @@ test('SQL Server 最小业务闭环验收', { timeout: 90000 }, async (t) => {
                 assert.deepEqual(actual.careRecords,expected.careRecords);
                 assert.deepEqual(actual.members,expected.members);
             } finally {
-                await otherPool.close();
+                await otherPool.end();
             }
         });
 
@@ -248,10 +248,10 @@ test('SQL Server 最小业务闭环验收', { timeout: 90000 }, async (t) => {
             const actual = current.members.find((member) => member.id === 'M0001');
             assert.equal(actual.latestNote, expected.latestNote);
             assert.equal(actual.contactDays, expected.contactDays);
-            const backup = await pool.request().query('SELECT COUNT(*) AS total FROM dbo.MemberProfileBackups');
-            assert.equal(backup.recordset[0].total, 2800);
-            const archived = await pool.request().query('SELECT COUNT(*) AS total FROM dbo.SourceRecords');
-            assert.equal(archived.recordset[0].total, Object.values(result.counts).reduce((sum, value) => sum + value, 0));
+            const backup = await pool.query('SELECT COUNT(*)::int AS total FROM MemberProfileBackups');
+            assert.equal(backup.rows[0].total, 2800);
+            const archived = await pool.query('SELECT COUNT(*)::int AS total FROM SourceRecords');
+            assert.equal(archived.rows[0].total, Object.values(result.counts).reduce((sum, value) => sum + value, 0));
             const repeated = await importSource(pool);
             assert.equal(repeated.imported, false);
             assert.deepEqual((await state()).tasks, existing.tasks);
@@ -404,14 +404,14 @@ test('SQL Server 最小业务闭环验收', { timeout: 90000 }, async (t) => {
             server.closeAllConnections();
             await new Promise((resolve) => server.close(resolve));
         }
-        await pool?.close();
+        await pool?.end();
         try {
             if (created) {
                 // ODBC 可能仍保留空闲会话，仅断开本次创建的临时库连接。
-                await master.request().query(`ALTER DATABASE [${database}] SET SINGLE_USER WITH ROLLBACK IMMEDIATE; DROP DATABASE [${database}]`);
+                await master.query(`DROP DATABASE "${database}" WITH (FORCE)`);
             }
         } finally {
-            await master.close();
+            await master.end();
         }
     }
 });

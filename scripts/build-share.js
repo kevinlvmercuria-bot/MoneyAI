@@ -5,6 +5,8 @@ const fs = require('node:fs');
 const path = require('node:path');
 const root = path.join(__dirname, '..');
 const read = file => fs.readFileSync(path.join(root, 'public', file), 'utf8');
+const applicationScripts = [...read('index.html').matchAll(/<script[^>]*src="([^"]+)"[^>]*><\/script>/g)]
+    .map(match => match[1] === 'workspace.js' ? 'team-workspace.js' : match[1]);
 let html = read('index.html').replace(' data-persistence="server"', '');
 html = html.replace(/<link rel="stylesheet" href="([^"]+)">/g, (_, file) => `<style>${read(file)}</style>`);
 html = html.replace(/\s*<script[^>]*src="[^"]+"[^>]*><\/script>/g, '');
@@ -16,7 +18,7 @@ const safeScript = text => text.replace(/<\/script/gi, '<\\/script');
 const scripts = [
     `<script id="nailmate-data" type="application/json">${safeScript(fs.readFileSync(path.join(root, 'data', 'team-data.json'), 'utf8'))}</script>`,
     `<script id="nailmate-product-images" type="application/json">${safeScript(read('team-product-images.json'))}</script>`,
-    ...['communication.js', 'team-store.js', 'team-chart.js', 'team-workspace.js'].map(file => `<script>${safeScript(read(file))}</script>`),
+    ...applicationScripts.map(file => `<script>${safeScript(read(file))}</script>`),
 ].join('\n');
 const output = path.resolve(process.argv[2] || path.join(root, 'NailMate_AI_微信分享版.html'));
 fs.writeFileSync(output, html.replace('</body>', () => scripts + '\n</body>'));

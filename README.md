@@ -1,29 +1,35 @@
-# NailMate AI
+# NailMate AI v5
 
-门店会员联系工作台，内置 2,800 位模拟会员，支持老板娘手工建档和登记美甲完成。联系进度展示从分派到到店的各阶段，保留柱状图的进入视口动效和重播按钮。当前可运行的是本地 SQL Server 版，Neon 和 Render 是下一阶段的部署目标。
+门店会员联系工作台，内置 2,800 位模拟会员，支持老板娘手工建档和登记美甲完成。联系进度展示从分派到到店的各阶段，保留柱状图的进入视口动效和重播按钮。当前源码的新旧版运行时均已改为 PostgreSQL，并提供企业微信好友回访和独立微信客服入口。本机日常服务已于 2026-11-12 切换到 PostgreSQL 17，原 SQL Server 数据保留作回退；详细验收和备份位置见最新交接记录。Neon 和 Render 尚未部署。
+
+当前发布版本为 **v5 / 5.0.0**，更新与升级说明见 [CHANGELOG](CHANGELOG.md)。
 
 `main` 作为团队共同维护入口。V4.1 的新版功能来自 `deploy/neon-render`；后续功能和部署适配通过独立分支及 PR 整合，保留原部署分支供追溯。
 
+当前维护目录为 `NailMate-GitHub`。新版页面在 `public/app/`，保留的旧版 AI 后端在 `server/legacy/`；早期原型已退役。结构与阅读顺序见 [维护指南](docs/architecture.md)。
+
 ## 本地启动
 
-需要 Node.js 22.13+、SQL Server 2016+（兼容级别 130+）。
+需要 Node.js 22.13+ 和 PostgreSQL 数据库。完整配置、旧数据搬迁与企业微信接入见 [PostgreSQL 与企微指南](docs/postgresql-wecom.md)。
 
 ```powershell
 npm ci
 npm run data:prepare
-# 首次配置：复制 .env.example 为 .env，并填写本机 SQL Server 配置。
-# 本机实例可在 Windows 服务中查看；已有 .env 不要覆盖。
+# 首次配置：复制 .env.example 为 .env，并填写 PostgreSQL DATABASE_URL。
+# 已有 .env 不要覆盖；旧 SQL Server 用户先按搬迁指南处理。
 npm run db:init
 npm start
 ```
 
 打开 http://127.0.0.1:3000。已完成环境配置时也可以双击 `启动NailMate.cmd`。服务监听本机，`.env` 保存在本机。
 
-`npm run data:prepare` 从仓库历史中的分享版恢复账号版模拟快照，并恢复旧版 SQLite 模拟来源，已有文件原样保留。此命令不连接 SQL Server，不恢复真实顾客资料、员工账号或业务记录。使用完整 Git 检出；若提示缺少历史对象，先运行 `git fetch origin`。两份数据使用各自原有模拟基线，账号版历史备注不包含旧版后来追加的性格备注。
+`npm run data:prepare` 从仓库历史中的分享版恢复账号版模拟快照，并恢复旧版 SQLite 模拟来源，已有文件原样保留。此命令不连接业务数据库，不恢复真实顾客资料、员工账号或业务记录。使用完整 Git 检出；若提示缺少历史对象，先运行 `git fetch origin`。两份数据使用各自原有模拟基线，账号版历史备注不包含旧版后来追加的性格备注。
 
-**从已有本地版升级**：先备份当前 SQL Server、`.env` 和 `data/`，执行 `npm run data:prepare`、`npm run db:migrate` 后再启动。`db:migrate` 只在事务中升级结构，不执行来源导入、不清空业务数据；可以重复执行。全新数据库才按上面的 `db:init` 初始化和导入。新版与旧版任务分别保存，旧任务仍通过 `/legacy.html` 查看。文件位置和回退记录见 [部署交接记录](docs/deployment/HANDOFF.md)。
+**已有 SQL Server 数据**：按 [搬迁指南](docs/postgresql-wecom.md) 先备份、在独立 PostgreSQL 库搬迁与验收，再停写切换。不要直接运行演示初始化覆盖原业务。已有 PostgreSQL 数据执行 `npm run db:migrate`，只升级结构，不导入或清空业务记录。
 
-首次进入账号版时创建老板娘账号，再从右上角的「员工账号管理」为已有员工设置密码。已有任务仍归原负责人。新分派可选择已开通登录的员工。登录有效期为 8 小时，服务重启后需重新登录。
+全新数据库首次进入账号版时创建老板娘账号，再从右上角的「员工账号管理」为已有员工设置密码。已有任务仍归原负责人。新分派可选择已开通登录的员工。登录有效期为 8 小时，服务重启后需重新登录。
+
+**只运行新版账号工作台**：已有数据文件和 `.env` 时，执行 `npm run db:init:team`、`npm run start:team`。前一个命令仅重复安全地创建或升级账号、状态、回访和企微/客服表，不导入模拟会员、不连接 SQLite；后一个命令不注册旧版接口，也不要求旧版会员表。账号版目前仍读取 `data/team-data.json` 作为基础资料。`npm start` 保持原有的新旧版兼容启动；也可设置 `ENABLE_LEGACY=false` 关闭旧版。此调整不迁移或删除已有业务数据。
 
 ## 新版流程
 
@@ -33,7 +39,7 @@ npm start
 4. 员工默认看到「今日待办」，其中包含待联系、到期跟进和需登记到店结果的任务。任务详情显示老板娘的本次交代，并提供「员工备注」。员工可以在负责的任务里补充客户偏好、服务细节或注意事项，也可以编辑自己写的备注。
 5. 员工可以在同一任务里补记跟进日期和事项，登记预约时间、改期或到店结果。反馈修改保留历史。跟进完成后可以清空日期并保存，或改为下一次跟进日期。
 6. 老板娘在「联系进度」查看员工汇总。点击柱子可以查看对应顾客和预约情况，「未回复」会优先显示已到跟进日的任务。
-7. 会员档案支持筛选、历史订单、备注编辑与置顶。老板娘可以查看和置顶员工备注，接手员工可以查看客户已有备注。产品库支持筛选及上传图片，话术工作台支持参考话术、手写修改、复制及图文下载。
+7. 会员档案支持筛选、历史订单、备注编辑与置顶。老板娘可以查看和置顶员工备注，接手员工可以查看客户已有备注。产品库支持筛选及上传图片，话术工作台支持参考话术、手写修改及企微联系入口。
 8. 「员工账号」可以新增员工、设置或重设密码，也可以删除离职员工。删除后，员工从账号列表和分派选项移除，旧会话失效。未完成任务可转交或稍后从「待交接」改派。历史反馈和客户档案中的偏好技师照常保留。
 9. 老板娘从「会员档案 → 新增顾客」建档，每位顾客都有「编辑档案」，可更新会员资料、金额、偏好、护理需求与联系授权。在档案中登记美甲完成，并在「美甲完成记录」中更正日期。最近到店补录用于复购，护理回访按美甲完成记录计算。「联系任务 → 撤回误派」适用于尚未登记反馈且确认员工未联系顾客的任务，撤回记录留在老板娘端。
 
@@ -54,9 +60,9 @@ npm start
 
 ## 数据与兼容
 
-- 主应用通过 `/api/team` 把分派、反馈、员工账号、备注、产品图片、手工档案和手工服务保存到 SQL Server 的 `TeamDemoState` 表。账号版新增手工档案标为真实数据，对模拟会员补登记的服务随该会员标为模拟。写入采用事务锁，并发重复分派会被拒绝。
+- 主应用通过 `/api/team` 把分派、反馈、员工账号、备注、产品图片、手工档案和手工服务保存到 PostgreSQL 的 `TeamDemoState` 表。账号版新增手工档案标为真实数据，对模拟会员补登记的服务随该会员标为模拟。写入采用事务锁，并发重复分派会被拒绝。
 - `TeamCareReminders` 以会员和服务订单为主键保存回访状态，和关联任务在同一事务写入。新建测试库运行 `npm run db:init` 会初始化该表。已有库启用新版前，先核对目标和备份，再单独执行 [回访表迁移](database/team-care-reminders.sql) 并安排服务切换。开发验收期间使用独立库。
-- 模拟会员资料位于 `data/team-data.json`。服务端按账号范围下发资料，员工只接收其负责顾客的数据。登录凭据单独保存在 SQL Server 的 `TeamCredentials` 表。
+- 模拟会员资料位于 `data/team-data.json`。服务端按账号范围下发资料，员工只接收其负责顾客的数据。登录凭据单独保存在 PostgreSQL 的 `TeamCredentials` 表。
 - 新表与旧的任务、文案、会员覆盖层分开保存；升级不删除旧数据。旧任务使用审核模型，不自动转换为新版员工分派任务；可从 `/legacy.html` 查看原流程。
 - 单文件分享版通过选择身份进入，沿用原有浏览器存储键。刷新可恢复当前浏览器的演示记录。账号版和分享版各自保存记录。
 
@@ -75,22 +81,27 @@ node scripts/build-share.js C:\path\NailMate.html
 | 文件 | 职责 |
 | --- | --- |
 | `public/index.html`、`workspace.js` | 主应用入口 |
-| `public/team-workspace.js` | 最新版页面、导航和交互 |
-| `public/team-store.js` | 浏览器与服务端共用的分派、反馈、联系限制规则 |
+| `public/team-workspace.js` | 初始化、导航、刷新与模块协调 |
+| `public/app/pages/` | 会员、任务、计划、产品、话术、报表和员工账号页面 |
+| `public/app/state.js`、`api.js`、`auth.js`、`effects.js` | 共享状态、请求、身份与公共交互 |
+| `public/shared/team-rules.js`、`team-persistence.js` | 纯业务规则与分享版存储适配 |
+| `public/team-store.js` | 浏览器与服务端共用的分派、反馈等业务操作 |
 | `public/team-chart.js`、`styles/team-chart.css` | 柱状图统计、渲染、动画与适配 |
 | `public/styles/team.css` | 新版原始界面样式 |
-| `server/team-routes.js` | SQL 持久化接口 |
+| `server/main.js`、`app.js` | 进程启动与 HTTP 应用装配 |
+| `server/team-routes.js`、`team-repository.js` | 新版接口协调与 SQL 持久化 |
 | `server/team-auth.js`、`database/team-auth.sql` | 本地账号、会话与密码存储 |
 | `scripts/build-share.js` | 从维护源码生成分享文件 |
 | `scripts/prepare-demo-data.js` | 从 Git 历史恢复模拟运行资料，保留已有文件 |
-| `database/migrate.js`、`setup.js` | 只升级结构，以及首次初始化与导入 |
+| `database/migrations.js`、`migrate.js`、`setup.js` | 新版/兼容版结构迁移，以及兼容版初始化与导入 |
 | `public/legacy.html`、`workspace-legacy.js`、`pages/` | 保留旧版工作台和真实 AI 接口 |
+| `server/legacy/` | 保留旧版的审核、文案、图片及来源资料读取 |
 
 ## 线上试用计划
 
 当前暂缓线上部署，优先完善本地网站功能并验证门店使用流程。收到恢复部署的指示后，再继续以下计划。
 
-目标是让 Render Web Service 从 [GitHub 的 MoneyAI 仓库](https://github.com/kevinlvmercuria-bot/MoneyAI) 构建新版账号工作台，并把业务数据保存在 Neon PostgreSQL。首轮使用模拟订单验证回访、分派和反馈。旧版 AI 审核工作台继续在本地使用。等确认商家的收银系统和导出能力后，再安排真实订单接入。
+目标是让 Render Web Service 从 [GitHub 的 MoneyAI 仓库](https://github.com/kevinlvmercuria-bot/MoneyAI) 构建新版账号工作台，并把业务数据保存在 Neon PostgreSQL。首轮使用模拟订单验证回访、分派和反馈。旧版 AI 审核工作台也已适配 PostgreSQL，是否启用由 ENABLE_LEGACY 控制。等确认商家的收银系统和导出能力后，再安排真实订单接入。
 
 | 阶段 | 工作 | 验收 |
 | --- | --- | --- |
@@ -115,3 +126,25 @@ npm run test:legacy
 SQL 验收创建随机独立测试库并在结束后清理，需要创建和删除测试库权限，不重置日常演示库。新版测试覆盖批量分派原子性、员工任务归属、重复提交、联系限制、存储失败、图表计数、SQL 持久化、并发分派和图片请求体大小。
 
 仓库内的开发入口和维护约定见 [AGENTS.md](AGENTS.md)。
+
+
+## 企业微信联系与网页客服
+
+员工在话术工作台或联系任务中选择「通过企业微信发送」，可编辑统一或逐人话术并附产品实拍图，提交后到企业微信确认。老板娘在员工账号管理中维护绑定。发送记录单独显示平台结果；模拟会员不能发送真实消息。
+
+「微信客服会话」使用独立咨询入口，支持网页接收文字、图片和文字回复；它不读取原企微好友聊天。具体配置、权限、回复限制与维护入口见 [接入指南](docs/postgresql-wecom.md)。
+
+验证增加 `npm run test:integrations`；所有数据库测试使用随机命名的独立 PostgreSQL 库，测试连接需要创建数据库权限。
+
+## 本机重置工作台密码
+
+忘记工作台登录密码时，可双击项目根目录的 `重置登录密码.bat`。它读取项目 `.env` 中的 `DATABASE_URL`，显示实际数据库和已有工作台账号；默认选择老板娘，也可以输入已有员工账号。
+
+输入两次新密码（10–128 字符，输入不回显），最后输入 `RESET` 才会提交；其他确认输入或 Ctrl+C 会取消。这里直接输入实际密码，包含 `@` 也不需要 URL 编码。密码不通过命令行参数或文件传递。
+
+工具只重置所选账号的密码，保留用户名、业务数据及其他账号；旧会话会在下次验证时失效，无须重启网站。它不会创建账号，也不会修改 PostgreSQL 的 `postgres` / `nailmate_app` 密码。仅在具有受控数据库配置的本机使用，不作为公开网页接口。
+
+实现入口为 `scripts/reset-password.js`，复用现有 `saveCredentials()` 的密码规则和 scrypt 算法。校验测试为 `node --test scripts/reset-password.test.js`；集成部分只有明确配置独立 `RESET_TEST_DATABASE_URL` 时才运行，不会回退到日常库。
+
+
+真实会员导入位于「会员档案 → 导入真实会员」，支持 Excel/CSV 模板、字段匹配、预览校验和二次确认；只新增真实会员，不覆盖原档案。详见 [导入指南](docs/member-import.md)。企微接入设置与真实测试向导位于「员工账号管理 → 企微接入设置」。

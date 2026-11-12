@@ -1,7 +1,6 @@
-IF OBJECT_ID(N'dbo.TeamCredentials', N'U') IS NULL
-    CREATE TABLE dbo.TeamCredentials (
-        employee nvarchar(30) NOT NULL PRIMARY KEY,
-        username varchar(32) NOT NULL UNIQUE,
-        salt binary(16) NOT NULL,
-        password_hash binary(64) NOT NULL
-    );
+CREATE TABLE IF NOT EXISTS teamcredentials (
+ employee varchar(30) PRIMARY KEY, username varchar(32) NOT NULL,
+ salt bytea NOT NULL CHECK(octet_length(salt)=16),
+ password_hash bytea NOT NULL CHECK(octet_length(password_hash)=64)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS teamcredentials_username ON teamcredentials(lower(username));

@@ -8,7 +8,7 @@ const {
     dueFollowup,
     noProductObjective,
     workbenchProducts,
-} = require('../public/rules');
+} = require('../../public/rules');
 
 function fail(condition, message, status = 409) {
     if (!condition) throw Object.assign(new Error(message), { apiStatus: status });

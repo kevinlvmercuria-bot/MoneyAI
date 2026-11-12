@@ -396,13 +396,13 @@ test('图表零数据和大数值、反馈口径、存储失败不伪报成功',
     assert.equal(engine.scopedState(owner).tasks.length, 0);
 });
 
-test('SQL 护理回访补算、唯一性、原子分派及订单状态变更', { timeout: 90000 }, async () => {
+test('PostgreSQL 护理回访补算、唯一性、原子分派及订单状态变更', { timeout: 90000 }, async () => {
     const { connect, transaction } = require('./db');
     const { initialize } = require('../database/setup');
     const { initializeTeamCareReminders } = require('./team-reminders');
     const { createApp } = require('./main');
     const database = 'NailMate_Care_' + randomBytes(8).toString('hex');
-    const master = await connect('master');
+    const master = await connect('postgres');
     const [a, b, c] = eligible;
     const services = [a, b, c].map((member, index) => ({
         member_id: member.member_id, order_id: 'fixture-service-' + index, order_type: 'nail_service',
@@ -419,13 +419,13 @@ test('SQL 护理回访补算、唯一性、原子分派及订单状态变更', {
         method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
     });
     try {
-        await master.request().query(`CREATE DATABASE [${database}]`); created = true;
+        await master.query(`CREATE DATABASE "${database}"`); created = true;
         pool = await connect(database);
         await assert.rejects(transaction(pool, async tx => {
             await initializeTeamCareReminders(tx);
             throw new Error('test migration rollback');
         }), /test migration rollback/);
-        assert.equal((await pool.request().query("SELECT OBJECT_ID('dbo.TeamCareReminders') AS id")).recordset[0].id, null);
+        assert.equal((await pool.query("SELECT to_regclass('public.teamcarereminders') AS id")).rows[0].id, null);
         await initialize(pool);
         await transaction(pool, initializeTeamCareReminders);
         const start = async () => {
@@ -448,12 +448,12 @@ test('SQL 护理回访补算、唯一性、原子分派及订单状态变更', {
         assert.deepEqual(scans[0].careReminders, scans[1].careReminders);
         assert.equal(scans[0].careReminders.length, 3, '第 7 天进入，取消及未完成订单不会覆盖有效订单');
         assert.ok(scans[0].careReminders.every(row => row.due_on === '2026-11-08' && row.status === 'pending' && row.data_type === 'simulation'));
-        const rows = () => pool.request().query('SELECT * FROM dbo.TeamCareReminders').then(result => result.recordset);
+        const rows = () => pool.query('SELECT * FROM TeamCareReminders').then(result => result.rows);
         assert.equal((await rows()).length, 3);
-        await assert.rejects(pool.request().query(`
-            INSERT dbo.TeamCareReminders
-            SELECT TOP (1) member_id,service_order_id,completed_on,due_on,status,task_id,data_type,created_at,updated_at
-            FROM dbo.TeamCareReminders`), /PRIMARY KEY|duplicate|重复/i);
+        await assert.rejects(pool.query(`
+            INSERT INTO TeamCareReminders
+            SELECT member_id,service_order_id,completed_on,due_on,status,task_id,data_type,created_at,updated_at
+            FROM TeamCareReminders LIMIT 1`), /PRIMARY KEY|duplicate|重复/i);
         const employeeBefore = await (await employeePost({ action: 'bootstrap' })).json();
         assert.deepEqual(employeeBefore.state.tasks, []);
         assert.equal(employeeBefore.state.careReminders, undefined);
@@ -539,21 +539,21 @@ test('SQL 护理回访补算、唯一性、原子分派及订单状态变更', {
         assert.equal((await (await post({ action: 'bootstrap' })).json()).snapshot.members.find(member => member.member_id === a.member_id).display_name, edit.name);
     } finally {
         if (server) await new Promise(resolve => server.close(resolve));
-        if (pool) await pool.close();
-        if (created) await master.request().query(`ALTER DATABASE [${database}] SET SINGLE_USER WITH ROLLBACK IMMEDIATE; DROP DATABASE [${database}]`);
-        await master.close();
+        if (pool) await pool.end();
+        if (created) await master.query(`DROP DATABASE "${database}" WITH (FORCE)`);
+        await master.end();
     }
 });
 
-test('SQL 账号、员工资料隔离、反馈并发与持久化', { timeout: 90000 }, async () => {
+test('PostgreSQL 账号、员工资料隔离、反馈并发与持久化', { timeout: 90000 }, async () => {
     const { connect } = require('./db');
     const { initialize } = require('../database/setup');
     const { createApp } = require('./main');
     const database = 'NailMate_Team_' + randomBytes(8).toString('hex');
-    const master = await connect('master');
+    const master = await connect('postgres');
     let pool, server, created = false;
     try {
-        await master.request().query(`CREATE DATABASE [${database}]`); created = true;
+        await master.query(`CREATE DATABASE "${database}"`); created = true;
         pool = await connect(database);
         await initialize(pool);
         let now = new Date('2026-11-11T15:59:59Z');
@@ -746,8 +746,8 @@ test('SQL 账号、员工资料隔离、反馈并发与持久化', { timeout: 90
         assert.equal(audit.state.tasks.find(task => task.task_id === result.taskIds[0]).result_history.length, 2);
     } finally {
         if (server) await new Promise(resolve => server.close(resolve));
-        if (pool) await pool.close();
-        if (created) await master.request().query(`ALTER DATABASE [${database}] SET SINGLE_USER WITH ROLLBACK IMMEDIATE; DROP DATABASE [${database}]`);
-        await master.close();
+        if (pool) await pool.end();
+        if (created) await master.query(`DROP DATABASE "${database}" WITH (FORCE)`);
+        await master.end();
     }
 });

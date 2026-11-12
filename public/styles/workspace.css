@@ -1204,3 +1204,17 @@ main {
         right: 0;
     }
 }
+/* Integration dialogs keep customer content readable on desktop and mobile. */
+.wecom-toolbar{margin-bottom:1.2rem;flex-wrap:wrap}
+.wecom-dialog{width:min(900px,94vw);max-height:90vh;overflow:auto}
+.wecom-dialog header{display:flex;align-items:center;justify-content:space-between;gap:1rem;position:sticky;top:-24px;z-index:2;background:#fffaf7;padding:.5rem 0}
+.wecom-dialog label{display:block;margin:.7rem 0}
+.wecom-dialog textarea{width:100%;min-height:100px;box-sizing:border-box}
+.wecom-dialog select{max-width:100%}
+.wecom-message{white-space:pre-wrap;overflow-wrap:anywhere}
+.wecom-preview{max-width:180px;max-height:220px;object-fit:contain}
+.kf-message{padding:.8rem;border-radius:12px;background:#f4eff1;margin:.6rem 0}
+.kf-message.outbound{background:#eaf4ec}
+.wecom-dialog input:not([type="checkbox"]):not([type="file"]){width:100%;box-sizing:border-box}
+.wecom-dialog .import-table{max-width:100%;overflow:auto;margin:1rem 0}
+.wecom-dialog .import-table td,.wecom-dialog .import-table th{padding:.5rem;text-align:left;white-space:nowrap}

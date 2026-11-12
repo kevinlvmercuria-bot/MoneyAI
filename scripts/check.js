@@ -15,7 +15,7 @@ function checkDirectory(directory) {
         } else if (entry.name.endsWith('.js')) {
             // 前端按浏览器 ES 模块解析，后端继续遵守 CommonJS 契约。
             const moduleFile =
-                directory.startsWith('public') && !['rules.js', 'app.js'].includes(entry.name);
+                directory.startsWith('public') && entry.name !== 'rules.js';
             const args = moduleFile
                 ? ['--input-type=module', '--check']
                 : ['--check', path.join(root, relative)];

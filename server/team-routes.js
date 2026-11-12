@@ -2,10 +2,10 @@
 
 const { readFileSync } = require('node:fs');
 const path = require('node:path');
-const { sql, transaction } = require('./db');
+const { transaction } = require('./db');
 const { createTeamStore } = require('../public/team-store');
 const { saveCredentials } = require('./team-auth');
-const { loadTeamCareReminders, saveTeamCareReminders } = require('./team-reminders');
+const { loadTeamState, persistTeamState, enabledEmployees, deleteEmployeeCredential } = require('./team-repository');
 const defaultSnapshot = JSON.parse(readFileSync(path.join(__dirname, '../data/team-data.json'), 'utf8'));
 
 function scopedSnapshot(account, tasks, snapshot) {
@@ -26,21 +26,6 @@ async function visibleResponse(tx, account, state, snapshot, includeSnapshot) {
     return { state, ...(includeSnapshot && { snapshot: scopedSnapshot(account, state.tasks, snapshot) }) };
 }
 
-async function enabledEmployees(tx) {
-    const { recordset } = await tx.request().query("SELECT employee FROM dbo.TeamCredentials WHERE employee<>N'';");
-    return new Set(recordset.map(row => row.employee));
-}
-
-async function persistTeamState(tx, engine, previousReminders) {
-    const { careReminders, ...state } = engine.exportState();
-    await saveTeamCareReminders(tx, previousReminders, careReminders);
-    await tx.request().input('payload', sql.NVarChar(sql.MAX), JSON.stringify(state)).query(`
-        IF EXISTS(SELECT 1 FROM dbo.TeamDemoState WHERE id=1)
-            UPDATE dbo.TeamDemoState SET payload=@payload, updated_at=SYSUTCDATETIME() WHERE id=1;
-        ELSE INSERT dbo.TeamDemoState(id,payload) VALUES(1,@payload);
-    `);
-}
-
 function registerTeamRoutes(app, pool, auth, { now, snapshot = defaultSnapshot } = {}) {
     // Register before the legacy 16 KB JSON parser: a compressed photo may be 1.4 MB.
     app.post('/api/team', require('express').json({ limit: '2mb' }), async (req, res, next) => {
@@ -49,11 +34,10 @@ function registerTeamRoutes(app, pool, auth, { now, snapshot = defaultSnapshot }
             const readOnly = action === 'state' || action === 'bootstrap';
             const response = await transaction(pool, async tx => {
                 const account = await auth.requireAccount(req, tx);
-                const row = await tx.request().query('SELECT payload FROM dbo.TeamDemoState WHERE id=1');
-                const reminders = await loadTeamCareReminders(tx);
+                const { initialState, reminders } = await loadTeamState(tx);
                 const requestTime = now?.() ?? new Date();
                 const engine = createTeamStore(snapshot, {
-                    initialState: row.recordset[0] ? JSON.parse(row.recordset[0].payload) : null,
+                    initialState,
                     careReminders: reminders,
                     now: () => requestTime,
                 });
@@ -70,6 +54,12 @@ function registerTeamRoutes(app, pool, auth, { now, snapshot = defaultSnapshot }
                     return visibleResponse(tx, account, state, engine.workspaceSnapshot(),
                         action === 'bootstrap' || account.role === 'employee' || payload.catalogRevision !== state.catalogRevision);
                 }
+                if (['reassign', 'withdraw', 'deleteEmployeeAccount'].includes(action)) {
+                    const pending = await tx.query(`SELECT 1 FROM wecomdeliveries WHERE status IN ('prepared','creating','pending','unknown')
+                        AND (($1::text IS NOT NULL AND task_id=$1) OR ($2::text IS NOT NULL AND employee=$2)) LIMIT 1`,
+                    [action === 'deleteEmployeeAccount' ? null : payload.id, action === 'deleteEmployeeAccount' ? payload.employee : null]);
+                    if (pending.rowCount) throw Object.assign(new Error('存在尚未完成的企微发送任务，请先核对发送记录后再撤回、改派或删除账号。'), { apiStatus: 409 });
+                }
                 const result = engine.applyAction(account, { ...payload, action });
                 if (action === 'assign' || action === 'reassign') {
                     const targets = action === 'assign' ? payload.tasks.map(task => task.assignee) : [payload.assignee];
@@ -80,16 +70,15 @@ function registerTeamRoutes(app, pool, auth, { now, snapshot = defaultSnapshot }
                 if (action === 'employeeAccount') {
                     const employee = payload.employee || payload.newEmployee.trim();
                     await saveCredentials(tx, employee, payload);
+                    await tx.query('UPDATE kfconversations SET employee_username=$2 WHERE employee=$1', [employee, payload.username.trim().toLowerCase()]);
                 }
                 if (action === 'deleteEmployeeAccount') {
                     if (result.taskIds.length && payload.replacement && !(await enabledEmployees(tx)).has(payload.replacement))
                         throw Object.assign(new Error('接手员工的登录账号已变更，请重新选择。'), { apiStatus: 409 });
-                    const deleted = await tx.request().input('employee', sql.NVarChar(30), payload.employee)
-                        .input('username', sql.VarChar(32), payload.username).query(`
-                            DELETE FROM dbo.TeamCredentials WHERE employee=@employee AND employee<>N'' AND username=@username;
-                        `);
-                    if (deleted.rowsAffected[0] !== 1)
+                    if (!(await deleteEmployeeCredential(tx, payload.employee, payload.username)))
                         throw Object.assign(new Error('该员工的登录账号已变更，请刷新后重试。'), { apiStatus: 409 });
+                    await tx.query('DELETE FROM wecomemployees WHERE employee=$1', [payload.employee]);
+                    await tx.query('UPDATE kfconversations SET employee=NULL,employee_username=NULL WHERE employee=$1', [payload.employee]);
                 }
                 await persistTeamState(tx, engine, reminders);
                 return {

@@ -1,57 +1,51 @@
 'use strict';
-
 const path = require('node:path');
 const { existsSync } = require('node:fs');
-
+const { Pool, types } = require('pg');
 const envPath = path.join(__dirname, '..', '.env');
 if (existsSync(envPath)) process.loadEnvFile(envPath);
-
-const windowsAuth = process.env.DB_AUTH === 'windows';
-const sql = windowsAuth ? require('mssql/msnodesqlv8') : require('mssql');
-const instance = process.env.DB_INSTANCE;
-
-const config = {
-    server: process.env.DB_SERVER || process.env.DB_HOST || 'localhost',
-    database: process.env.DB_NAME || 'NailMate',
-    options: {
-        encrypt: process.env.DB_ENCRYPT !== 'false',
-        trustServerCertificate: process.env.DB_TRUST_SERVER_CERTIFICATE === 'true',
-    },
-};
-
-if (windowsAuth) {
-    config.driver = process.env.DB_ODBC_DRIVER || 'ODBC Driver 18 for SQL Server';
-    config.options.trustedConnection = true;
-    if (instance) config.server += '\\' + instance;
-} else {
-    config.user = process.env.DB_USER;
-    config.password = process.env.DB_PASSWORD;
-    if (instance) config.options.instanceName = instance;
-}
-if (!instance && process.env.DB_PORT) config.port = Number(process.env.DB_PORT);
-
-function connect(database = config.database) {
-    return new sql.ConnectionPool({ ...config, database }).connect();
-}
-
-async function transaction(pool, work, lockMode = 'Exclusive') {
-    const tx = new sql.Transaction(pool);
-    await tx.begin();
+// Keep the existing repository JSON decoding and date-only API independent of TZ.
+types.setTypeParser(114, (value) => value);
+types.setTypeParser(3802, (value) => value);
+types.setTypeParser(1082, (value) => value);
+async function connect(database) {
+    if (!process.env.DATABASE_URL)
+        throw new Error(
+            '请配置 PostgreSQL DATABASE_URL；不会自动连接旧 SQL Server。',
+        );
+    const url = new URL(process.env.DATABASE_URL);
+    if (database) url.pathname = '/' + database;
+    const pool = new Pool({
+        connectionString: url.toString(),
+        max: 10,
+        connectionTimeoutMillis: 10000,
+    });
     try {
-        // 同一演示数据库内，候选复核、写入和返回快照放在同一个事务。
-        const lock = await tx.request().input('mode', sql.VarChar(32), lockMode).query(`
-            DECLARE @result int;
-            EXEC @result = sp_getapplock @Resource = 'NailMateDemo', @LockMode = @mode, @LockTimeout = 5000;
-            SELECT @result AS result;
-        `);
-        if (lock.recordset[0].result < 0) throw new Error('演示数据库繁忙，请重试');
-        const result = await work(tx);
-        await tx.commit();
-        return result;
+        await pool.query('SELECT 1');
+        return pool;
     } catch (error) {
-        await tx.rollback().catch(() => {});
+        await pool.end();
         throw error;
     }
 }
-
-module.exports = { sql, connect, transaction };
+async function transaction(pool, work, lockMode = 'Exclusive') {
+    const client = await pool.connect();
+    try {
+        await client.query('BEGIN');
+        await client.query("SET LOCAL lock_timeout = '5s'");
+        const lock =
+            lockMode === 'Shared'
+                ? 'pg_advisory_xact_lock_shared'
+                : 'pg_advisory_xact_lock';
+        await client.query(`SELECT ${lock}(73170421)`);
+        const result = await work(client);
+        await client.query('COMMIT');
+        return result;
+    } catch (error) {
+        await client.query('ROLLBACK').catch(() => {});
+        throw error;
+    } finally {
+        client.release();
+    }
+}
+module.exports = { connect, transaction };

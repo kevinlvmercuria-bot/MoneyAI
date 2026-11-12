@@ -5,7 +5,7 @@ const { readFileSync } = require('node:fs');
 const path = require('node:path');
 const { randomBytes, scrypt, timingSafeEqual } = require('node:crypto');
 const { promisify } = require('node:util');
-const { sql, transaction } = require('./db');
+const { transaction } = require('./db');
 
 const hashPassword = promisify(scrypt);
 const migration = readFileSync(path.join(__dirname, '../database/team-auth.sql'), 'utf8');
@@ -18,7 +18,7 @@ function requireCondition(condition, apiStatus, message) {
 }
 
 function initializeTeamAuth(tx) {
-    return tx.request().batch(migration);
+    return tx.query(migration);
 }
 
 function publicUser(row) {
@@ -30,10 +30,10 @@ function loginName(value) {
 }
 
 async function findCredential(db, username) {
-    const result = await db.request().input('username', sql.VarChar(32), username).query(`
-        SELECT username, employee, salt, password_hash FROM dbo.TeamCredentials WHERE username=@username;
-    `);
-    return result.recordset[0];
+    const result = await db.query(`
+        SELECT username, employee, salt, password_hash FROM TeamCredentials WHERE lower(username)=lower($1);
+    `, [username]);
+    return result.rows[0];
 }
 
 async function saveCredentials(tx, employee, body) {
@@ -45,13 +45,10 @@ async function saveCredentials(tx, employee, body) {
     requireCondition(!duplicate || duplicate.employee === employee, 409, '这个账号名已被使用。');
     const salt = randomBytes(16);
     const hash = await hashPassword(body.password, salt, 64);
-    await tx.request().input('employee', sql.NVarChar(30), employee)
-        .input('username', sql.VarChar(32), username).input('salt', sql.Binary(16), salt)
-        .input('hash', sql.Binary(64), hash).query(`
-            UPDATE dbo.TeamCredentials SET username=@username, salt=@salt, password_hash=@hash WHERE employee=@employee;
-            IF @@ROWCOUNT=0
-                INSERT dbo.TeamCredentials(employee,username,salt,password_hash) VALUES(@employee,@username,@salt,@hash);
-        `);
+    await tx.query(`
+            INSERT INTO TeamCredentials(employee,username,salt,password_hash) VALUES($1,$2,$3,$4)
+            ON CONFLICT(employee) DO UPDATE SET username=excluded.username,salt=excluded.salt,password_hash=excluded.password_hash;
+        `, [employee, username, salt, hash]);
     return { employee, username, salt };
 }
 
@@ -84,8 +81,8 @@ function registerTeamAuth(app, pool) {
     }
 
     async function hasOwner(db = pool) {
-        const { recordset } = await db.request().query("SELECT 1 AS present FROM dbo.TeamCredentials WHERE employee=N'';");
-        return recordset.length > 0;
+        const { rows } = await db.query("SELECT 1 AS present FROM TeamCredentials WHERE employee='';");
+        return rows.length > 0;
     }
 
     function signIn(req, res, credential) {
