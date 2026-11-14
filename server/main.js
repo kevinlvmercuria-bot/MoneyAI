@@ -25,7 +25,7 @@ async function start({ legacy = process.env.ENABLE_LEGACY !== 'false' } = {}) {
     }
     const app = createApp(pool, { legacy });
     try { await app.locals.wecomSettings.ensure(); } catch (error) { await pool.end(); throw error; }
-    const server = app.listen(Number(process.env.APP_PORT || 3000), process.env.APP_HOST || '127.0.0.1', () => {
+    const server = app.listen(Number(process.env.PORT || process.env.APP_PORT || 3000), process.env.APP_HOST || '127.0.0.1', () => {
         console.log(`NailMate 已启动 http://127.0.0.1:${server.address().port}`);
     });
     const worker = setInterval(() => app.locals.wecom.tick().catch(error => console.error('企微任务查询未完成：', error.message)), 15000);

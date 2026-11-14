@@ -1,14 +1,16 @@
-# NailMate AI v5
+# NailMate AI v5.1
 
 门店会员联系工作台，内置 2,800 位模拟会员，支持老板娘手工建档和登记美甲完成。联系进度展示从分派到到店的各阶段，保留柱状图的进入视口动效和重播按钮。当前源码的新旧版运行时均已改为 PostgreSQL，并提供企业微信好友回访和独立微信客服入口。本机日常服务已于 2026-11-12 切换到 PostgreSQL 17，原 SQL Server 数据保留作回退；详细验收和备份位置见最新交接记录。Neon 和 Render 尚未部署。
 
-当前发布版本为 **v5 / 5.0.0**，更新与升级说明见 [CHANGELOG](CHANGELOG.md)。
+当前发布版本为 **v5.1 / 5.1.0**，更新与升级说明见 [CHANGELOG](CHANGELOG.md)。
 
 `main` 作为团队共同维护入口。V4.1 的新版功能来自 `deploy/neon-render`；后续功能和部署适配通过独立分支及 PR 整合，保留原部署分支供追溯。
 
 当前维护目录为 `NailMate-GitHub`。新版页面在 `public/app/`，保留的旧版 AI 后端在 `server/legacy/`；早期原型已退役。结构与阅读顺序见 [维护指南](docs/architecture.md)。
 
 ## 本地启动
+
+公网模拟演示的注册步骤、Render 构建命令及环境变量见 [Neon + Render 演示部署](docs/deployment/cloud-demo.md)。该部署使用独立演示库，不迁移本机业务数据。
 
 需要 Node.js 22.13+ 和 PostgreSQL 数据库。完整配置、旧数据搬迁与企业微信接入见 [PostgreSQL 与企微指南](docs/postgresql-wecom.md)。
 

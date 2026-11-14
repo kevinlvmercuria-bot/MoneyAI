@@ -6,6 +6,7 @@ const path = require('node:path');
 const { randomBytes, scrypt, timingSafeEqual } = require('node:crypto');
 const { promisify } = require('node:util');
 const { transaction } = require('./db');
+const { httpConfig, checkRequest } = require('./http-config');
 
 const hashPassword = promisify(scrypt);
 const migration = readFileSync(path.join(__dirname, '../database/team-auth.sql'), 'utf8');
@@ -53,6 +54,8 @@ async function saveCredentials(tx, employee, body) {
 }
 
 function registerTeamAuth(app, pool) {
+    const config = httpConfig();
+    const sessionCookieOptions = { ...cookieOptions, secure: Boolean(config.origin) };
     const sessions = new Map();
     const loginAttempts = new Map();
     const parseJson = express.json({ limit: '4kb' });
@@ -91,18 +94,13 @@ function registerTeamAuth(app, pool) {
         sessions.delete(tokenFrom(req));
         const token = randomBytes(32).toString('hex');
         sessions.set(token, { username: credential.username, salt: Buffer.from(credential.salt), expires: now + SESSION_DURATION });
-        res.cookie(SESSION_COOKIE, token, { ...cookieOptions, maxAge: SESSION_DURATION });
+        res.cookie(SESSION_COOKIE, token, { ...sessionCookieOptions, maxAge: SESSION_DURATION });
         res.json({ user: publicUser(credential) });
     }
 
     app.use((req, res, next) => {
-        requireCondition(['localhost', '127.0.0.1'].includes(req.hostname), 403, '请使用本机地址访问。');
+        checkRequest(req, config);
         res.set('X-Content-Type-Options', 'nosniff');
-        if (!['GET', 'HEAD', 'OPTIONS'].includes(req.method)) {
-            const origin = req.get('origin');
-            requireCondition((!origin || origin === `${req.protocol}://${req.get('host')}`)
-                && req.get('sec-fetch-site') !== 'cross-site', 403, '请求来源无效。');
-        }
         next();
     });
 
@@ -113,6 +111,7 @@ function registerTeamAuth(app, pool) {
     });
 
     app.post('/api/team/auth/setup', parseJson, async (req, res) => {
+        requireCondition(!config.origin, 403, '公网服务请由部署环境初始化管理员账号。');
         const credential = await transaction(pool, async tx => {
             requireCondition(!(await hasOwner(tx)), 409, '老板娘账号已创建，请登录。');
             return saveCredentials(tx, '', req.body || {});
@@ -142,7 +141,7 @@ function registerTeamAuth(app, pool) {
     app.post('/api/team/auth/logout', async (req, res) => {
         await requireAccount(req);
         sessions.delete(tokenFrom(req));
-        res.clearCookie(SESSION_COOKIE, cookieOptions).status(204).end();
+        res.clearCookie(SESSION_COOKIE, sessionCookieOptions).status(204).end();
     });
 
     async function ownerOnly(req, _res, next) {
