@@ -10,7 +10,7 @@
 
 ## 2. Render Web Service
 
-注册 https://dashboard.render.com，授权访问实际源码仓库 `kevinlvmercuria-bot/MoneyAI`，选择包含 v5.1 的 `main` 分支；旧的 v5 发布不含公网适配。
+注册 https://dashboard.render.com，授权访问实际源码仓库 `kevinlvmercuria-bot/MoneyAI`，选择包含 v5.2 的 `main` 分支；v5.2 同时包含公网适配和不依赖 Git 历史的构建修复。
 
 | 字段 | 值 |
 | --- | --- |
