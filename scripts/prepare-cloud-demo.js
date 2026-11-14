@@ -2,22 +2,13 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
-const { execFileSync } = require('node:child_process');
+const { gunzipSync } = require('node:zlib');
 const root = path.join(__dirname, '..');
-const ref = '09ca7b6dfa78278c4a4b401f1a0ec31d5fad7695';
-const file = 'nailmate/NailMate_AI_微信分享版.html';
-const git = args => execFileSync('git', args, { cwd: root, maxBuffer: 32 * 1024 * 1024, stdio: ['ignore', 'pipe', 'pipe'] });
 
-// Always recover the fixed historical simulation; never upload the local data directory.
-let html;
-try { html = git(['show', `${ref}:${file}`]); }
-catch {
-    git(['fetch', '--depth=1', 'origin', ref]);
-    html = git(['show', `${ref}:${file}`]);
-}
-const match = html.toString('utf8').match(/<script[^>]*id="nailmate-data"[^>]*>([\s\S]*?)<\/script>/);
-if (!match) throw new Error('固定历史版本缺少模拟快照。');
-const snapshot = JSON.parse(match[1]);
+// The versioned fixture works in source archives and builds without .git or network.
+// It contains only the fixed historical simulation, never the local data directory.
+const fixture = path.join(root, 'database/fixtures/team-demo.json.gz');
+const snapshot = JSON.parse(gunzipSync(fs.readFileSync(fixture), { maxOutputLength: 16 * 1024 * 1024 }).toString('utf8'));
 if (snapshot.data_type !== 'simulation' || snapshot.members?.length !== 2800)
     throw new Error('模拟快照标记或会员数不符。');
 for (const table of ['members', 'orders', 'products', 'appointments', 'contact_logs', 'member_notes', 'member_care_profiles', 'campaign_tasks']) {
